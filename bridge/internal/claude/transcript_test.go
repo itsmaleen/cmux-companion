@@ -231,31 +231,6 @@ func TestEncodeCWD(t *testing.T) {
 	}
 }
 
-func TestCapTail(t *testing.T) {
-	// Under the cap: unchanged.
-	if got := capTail("hello"); got != "hello" {
-		t.Fatalf("small input changed: %q", got)
-	}
-	// Over the cap: trimmed to <= maxRenderBytes, ends preserved, starts at a line boundary.
-	var b strings.Builder
-	for i := 0; i < 20000; i++ {
-		b.WriteString("line ")
-		b.WriteString(strings.Repeat("x", 10))
-		b.WriteByte('\n')
-	}
-	big := b.String() + "FINAL-TAIL-LINE\n"
-	got := capTail(big)
-	if len(got) > maxRenderBytes {
-		t.Fatalf("capTail returned %d bytes, want <= %d", len(got), maxRenderBytes)
-	}
-	if !strings.HasSuffix(got, "FINAL-TAIL-LINE\n") {
-		t.Fatal("capTail dropped the most-recent content")
-	}
-	if strings.HasPrefix(got, "ine ") || got[0] == 'x' {
-		t.Fatalf("capTail did not start at a line boundary: %q", got[:20])
-	}
-}
-
 func TestResolveRejectsMaliciousCheckpointID(t *testing.T) {
 	home := t.TempDir()
 	projects := filepath.Join(home, ".claude", "projects", "-proj")

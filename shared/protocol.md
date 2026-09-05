@@ -223,36 +223,61 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 
 **Agents (bridge-local, not proxied to cmux):**
 - `claude.transcript` — `{"surface_id":"...","max_messages":300,"known_fingerprint":"..."}`
-  → `{"supported":true,"text":"...","session_id":"...","session_missing":false,
-  "fingerprint":"...","unchanged":false,"source":"hook_store_surface"}`.
+  → `{"supported":true,"agent_kind":"claude","text":"...","session_id":"...",
+  "session_title":"","session_missing":false,"fingerprint":"...",
+  "unchanged":false,"source":"hook_store_surface"}`.
 
-  Renders the Claude session behind a surface from Claude Code's own session
-  JSONL, which is the conversation history — claude-code is a full-screen TUI
-  that keeps no terminal scrollback, so `surface.read_text` only ever returns
-  its current screen. The iOS app renders this as the surface's card content,
-  with the live screen appended below it.
+  Renders the conversation behind a surface running Claude Code or opencode —
+  both are full-screen TUIs that keep no terminal scrollback, so
+  `surface.read_text` only ever returns their current screen. The iOS app
+  renders this as the surface's card content, with the live screen appended
+  below it. `agent_kind` says which agent answered (`"claude"` or
+  `"opencode"`, omitted when `supported` is false); `session_title` is the
+  agent's own title for the session, when it has one distinct from
+  `session_id` (opencode; Claude has none).
 
-  The surface → transcript binding comes from cmux's hook session store
-  (`~/.cmuxterm/claude-hook-sessions.json`), where `cmux hooks claude <event>`
-  records the `transcript_path` Claude Code reports for each session along with
-  the surface it runs in. `source` says which strategy resolved the file:
-  `hook_store_surface` (the surface's current session), `hook_store_session`
-  (its `checkpoint_id`'s recorded path), `projects_glob` (derived under
-  `~/.claude/projects`), or `cwd_latest` (last resort, only when no session is
-  named anywhere). A surface bound to a session whose file is gone comes back
-  `session_missing` rather than showing a neighbouring session's conversation.
+  For Claude, the surface → transcript binding comes from cmux's hook session
+  store (`~/.cmuxterm/claude-hook-sessions.json`), where `cmux hooks claude
+  <event>` records the `transcript_path` Claude Code reports for each session
+  along with the surface it runs in. `source` says which strategy resolved the
+  file: `hook_store_surface` (the surface's current session),
+  `hook_store_session` (its `checkpoint_id`'s recorded path), `projects_glob`
+  (derived under `~/.claude/projects`), or `cwd_latest` (last resort, only when
+  no session is named anywhere). A surface bound to a session whose file is
+  gone comes back `session_missing` rather than showing a neighbouring
+  session's conversation.
+
+  For opencode, the conversation lives in `~/.local/share/opencode/opencode.db`
+  (SQLite) rather than per-session files. When the runtime already names the
+  exact session — herdr reports it as the pane's `agent_session`, and a cmux
+  surface can too if `cmux hooks opencode install` is set up — the bridge reads
+  it directly (`source: "resume_binding"`). Otherwise (a plain cmux surface,
+  where the opencode integration is opt-in and usually absent) the bridge
+  identifies the surface as opencode's from its **tty**: cmux's terminal table
+  gives the surface a tty, and a tty with an opencode process on it is running
+  opencode — never inferred from the title, which a shell can be made to say
+  anything with. WHICH conversation then comes from the surface's title
+  (opencode sets it to `"OC | <session title>"`, truncated) matched against
+  sessions in the surface's working directory (`source: "opencode_title_cwd"`).
+  The title is required, not preferred: several opencode surfaces routinely
+  share a directory, so "newest session here" would confidently show a
+  neighbour's conversation. A surface running opencode whose session has no
+  title yet reports `source: "opencode_unidentified"` and renders empty rather
+  than guessing.
 
   `fingerprint` identifies the rendering. Pass it back as `known_fingerprint`
   and an unchanged transcript answers `unchanged: true` with no `text`, which is
   what makes polling this on every refresh cycle cheap.
 
   `agent.transcript` is an accepted alias. Under herdr the binding comes from
-  herdr's own Claude integration (`herdr integration install claude`), which
-  reports the session id herdr exposes as the pane's `agent_session`; the
-  bridge then finds `<id>.jsonl` under `~/.claude/projects` (`source:
-  "projects_glob"`). Without the integration there is no session id and the
-  bridge falls back to the newest transcript for the pane's cwd
-  (`cwd_latest`).
+  herdr's own Claude or opencode integration, which reports the session id
+  herdr exposes as the pane's `agent_session`; for Claude the bridge then finds
+  `<id>.jsonl` under `~/.claude/projects` (`source: "projects_glob"`), for
+  opencode it reads that session id directly from opencode's database
+  (`source: "resume_binding"`). Without the integration there is no session id;
+  Claude falls back to the newest transcript for the pane's cwd (`cwd_latest`),
+  and opencode has no such fallback under herdr (there is no tty to match a
+  title against, unlike cmux).
 
 - `surface.paste_image` — `{"surface_id":"...","image_base64":"...","image_format":"png","text":"what brand is this?","submit":true}`
   → `{"surface_id":"...","path":"/Users/…/pasted-….png","bytes":175,"format":"png"}`.

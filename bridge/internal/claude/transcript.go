@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/itsmaleen/cmux-companion/bridge/internal/transcriptrender"
 )
 
 // sessionIDPattern matches a Claude session UUID. checkpoint_id comes from
@@ -423,34 +425,11 @@ type jsonlLine struct {
 	} `json:"message"`
 }
 
-// maxRenderBytes bounds the rendered transcript so a long session can't produce
-// a payload that blows past WebSocket message-size limits or bogs the client's
-// text view. The tail (most recent conversation) is kept.
-const maxRenderBytes = 128 * 1024
-
-// capTail trims s to at most maxRenderBytes, keeping the end and starting at a
-// line boundary so a message isn't cut mid-line.
-func capTail(s string) string {
-	if len(s) <= maxRenderBytes {
-		return s
-	}
-	s = s[len(s)-maxRenderBytes:]
-	if i := strings.IndexByte(s, '\n'); i >= 0 && i+1 < len(s) {
-		s = s[i+1:]
-	}
-	return s
-}
-
 // renderJSONL parses raw JSONL data and returns the rendered transcript.
 // Only the last maxMessages user/assistant messages are included, and the
-// result is byte-capped to the most recent maxRenderBytes.
+// result is byte-capped by the shared renderer.
 func renderJSONL(data []byte, maxMessages int) string {
-	type msg struct {
-		isUser bool
-		text   string
-	}
-
-	var messages []msg
+	var messages []transcriptrender.Message
 	for _, rawLine := range strings.Split(string(data), "\n") {
 		rawLine = strings.TrimSpace(rawLine)
 		if rawLine == "" {
@@ -467,38 +446,14 @@ func renderJSONL(data []byte, maxMessages int) string {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		// Header comes from the validated line.Type, not message.role, which
-		// can be absent/unexpected on some events.
-		messages = append(messages, msg{isUser: line.Type == "user", text: text})
+		// Role comes from the validated line.Type, not message.role, which can
+		// be absent or unexpected on some events.
+		messages = append(messages, transcriptrender.Message{
+			IsUser: line.Type == "user",
+			Text:   text,
+		})
 	}
-
-	// Keep only the last maxMessages.
-	if maxMessages > 0 && len(messages) > maxMessages {
-		messages = messages[len(messages)-maxMessages:]
-	}
-
-	var sb strings.Builder
-	for i, m := range messages {
-		// One header per turn, not per message: an assistant turn is written as
-		// a run of lines (text, then a line per tool call), and repeating the
-		// header — with a blank line around it — between them turns a readable
-		// exchange into a ladder of "⏺ Claude" banners. Blank lines separate
-		// turns, not the lines within one.
-		if i == 0 || messages[i-1].isUser != m.isUser {
-			if i > 0 {
-				sb.WriteByte('\n')
-			}
-			header := "⏺ Claude"
-			if m.isUser {
-				header = "› You"
-			}
-			sb.WriteString(header)
-			sb.WriteByte('\n')
-		}
-		sb.WriteString(m.text)
-		sb.WriteByte('\n')
-	}
-	return capTail(sb.String())
+	return transcriptrender.Render(messages, "Claude", maxMessages)
 }
 
 // extractContent converts a raw JSON content field (string or block array)
@@ -530,44 +485,11 @@ func extractContent(raw json.RawMessage) string {
 			}
 		case "tool_use":
 			if name, _ := block["name"].(string); name != "" {
-				parts = append(parts, "⚙ "+name+toolArgumentSummary(block["input"]))
+				input, _ := block["input"].(map[string]any)
+				parts = append(parts, transcriptrender.ToolLine(name, input))
 			}
 			// thinking, tool_result, and anything else: skip
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-// toolArgumentKeys are the tool inputs worth showing, most identifying first.
-// A bare "⚙ Bash" says nothing about what a turn did; "⚙ Bash: go test ./..."
-// is the difference between a readable conversation and a wall of tool names.
-var toolArgumentKeys = []string{
-	"command", "file_path", "notebook_path", "path", "pattern", "query",
-	"url", "skill", "subagent_type", "description", "prompt",
-}
-
-// maxToolArgumentRunes bounds the summary: it shares a line with the tool name
-// on a phone-width card, and some inputs (a prompt, a heredoc) are enormous.
-const maxToolArgumentRunes = 80
-
-// toolArgumentSummary renders a tool call's most identifying argument as a
-// single short line, or "" when there is nothing useful to show.
-func toolArgumentSummary(raw any) string {
-	input, ok := raw.(map[string]any)
-	if !ok {
-		return ""
-	}
-	for _, key := range toolArgumentKeys {
-		value, _ := input[key].(string)
-		value = strings.TrimSpace(strings.Join(strings.Fields(value), " "))
-		if value == "" {
-			continue
-		}
-		runes := []rune(value)
-		if len(runes) > maxToolArgumentRunes {
-			value = string(runes[:maxToolArgumentRunes]) + "…"
-		}
-		return ": " + value
-	}
-	return ""
 }

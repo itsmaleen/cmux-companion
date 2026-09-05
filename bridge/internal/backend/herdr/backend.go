@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
-	"github.com/itsmaleen/cmux-companion/bridge/internal/claude"
+	"github.com/itsmaleen/cmux-companion/bridge/internal/transcripts"
 )
 
 // Config selects the herdr socket.
@@ -32,11 +32,11 @@ type Config struct {
 
 // Backend implements backend.Backend over herdr's socket API.
 type Backend struct {
-	cfg       Config
-	client    *client
-	hub       *backend.Hub
-	resolver  *claude.Resolver
-	connected atomic.Bool
+	cfg        Config
+	client     *client
+	hub        *backend.Hub
+	dispatcher *transcripts.Dispatcher
+	connected  atomic.Bool
 
 	mu         sync.Mutex
 	panes      map[string]paneInfo // by pane_id, from the snapshot + pane events
@@ -61,7 +61,7 @@ func New(cfg Config) *Backend {
 		cfg:        cfg,
 		client:     &client{socketPath: cfg.SocketPath, timeout: 10 * time.Second},
 		hub:        backend.NewHub(),
-		resolver:   claude.NewResolver(),
+		dispatcher: transcripts.New(),
 		panes:      map[string]paneInfo{},
 		lastStatus: map[string]string{},
 		statusSubs: map[string]context.CancelFunc{},

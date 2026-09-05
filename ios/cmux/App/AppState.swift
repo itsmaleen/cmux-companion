@@ -499,8 +499,9 @@ final class AppState: ObservableObject {
         if surface?.isBrowser != true {
             readSurfaceText(id, lines: Self.focusedHistoryLines)
         }
-        // Same for a claude surface's conversation, which IS its card content.
-        if surface?.isClaudeAgent == true {
+        // Same for a claude/opencode surface's conversation, which IS its card
+        // content.
+        if surface?.hasTranscript == true {
             loadClaudeTranscript(id)
         }
         send(method: "surface.focus", params: ["surface_id": id]) { [weak self] _ in
@@ -795,7 +796,7 @@ final class AppState: ObservableObject {
     /// shell, and a cached conversation would otherwise stay pinned above its
     /// output for the rest of the session.
     func cardText(for surface: Surface) -> String {
-        guard surface.isClaudeAgent, let text = claudeCardText[surface.id] else {
+        guard surface.hasTranscript, let text = claudeCardText[surface.id] else {
             return surfaceContent[surface.id] ?? ""
         }
         return text
@@ -1444,6 +1445,11 @@ struct Surface: Identifiable {
 
     var isBrowser: Bool { type == "browser" }
     var isClaudeAgent: Bool { agentKind == "claude" }
+    /// Whether this surface's conversation can be read via `agent.transcript`.
+    /// Claude Code and opencode are both full-screen TUIs that keep no
+    /// terminal scrollback, so their card content and history reader come
+    /// from this instead of the terminal mirror.
+    var hasTranscript: Bool { agentKind == "claude" || agentKind == "opencode" }
 
     init?(_ dict: [String: Any]) {
         guard let id = dict["id"] as? String else { return nil }

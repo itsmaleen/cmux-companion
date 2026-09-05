@@ -706,7 +706,7 @@ struct WorkspaceLayoutView: View {
             contentScale: contentScale,
             isBrowser: surface.isBrowser,
             browserURL: appState.browserURLs[surface.id] ?? "",
-            canOpenHistory: surface.isClaudeAgent,
+            canOpenHistory: surface.hasTranscript,
             onOpenHistory: {
                 // Resolve the CURRENTLY focused surface at fire time rather than
                 // capturing this card's `surface`. During a cycle transition the
@@ -716,7 +716,7 @@ struct WorkspaceLayoutView: View {
                 // guarantees history always matches what's on screen.
                 let focused = appState.surfaces.first(where: { $0.id == appState.focusedSurfaceID })
                     ?? surface
-                guard focused.isClaudeAgent else { return }
+                guard focused.hasTranscript else { return }
                 appState.presentedHistory = HistoryTarget(id: focused.id, title: focused.title)
             },
             isWorking: appState.workingSurfaces.contains(surface.id),
@@ -992,11 +992,11 @@ struct WorkspaceLayoutView: View {
         let lines = surface.id == appState.focusedSurfaceID
             ? AppState.focusedHistoryLines : 50
         appState.readSurfaceText(surface.id, lines: lines)
-        // A claude surface's card is its conversation, so keep the focused
-        // one's transcript current alongside the mirror. Unchanged transcripts
-        // answer from a fingerprint, so this poll is nearly free; background
-        // surfaces load theirs when they come into focus.
-        if surface.isClaudeAgent, surface.id == appState.focusedSurfaceID {
+        // A claude/opencode surface's card is its conversation, so keep the
+        // focused one's transcript current alongside the mirror. Unchanged
+        // transcripts answer from a fingerprint, so this poll is nearly free;
+        // background surfaces load theirs when they come into focus.
+        if surface.hasTranscript, surface.id == appState.focusedSurfaceID {
             appState.loadClaudeTranscript(surface.id)
         }
     }
