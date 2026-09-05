@@ -136,7 +136,15 @@ from `agent_session`. cmux: `resume_binding` if the opencode hooks are
 installed, else the branch's tty/process + `"OC | <title>"` match. Phone:
 `Surface.hasTranscript` replaces `isClaudeAgent` at the gating sites.
 
-### Phase C — live frames + a real emulator (herdr first) — bridge done, phone in progress
+### Phase C — live frames + a real emulator (herdr first) — done (herdr)
+
+Shipped 2026-09-05. Card composition: the emulator fills the card and the
+history reader stays a sheet — SwiftTerm's view is itself a UIScrollView, so
+the nested history-above-live scroll container was not workable. The view
+replays the last full frame + deltas after every SwiftTerm geometry change
+(its layoutSubviews re-fits and crops the terminal). Verified end to end
+against a live bridge + herdr pane (170×42, 35 frames in 4 s) and with
+recorded-frame screenshots in `ios/screenshots/`.
 
 Bridge:
 - New commands `surface.frames.subscribe {surface_id, cols?, rows?}` /
