@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "8eb6c1396d0d",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "plans/cmux-frames-proposal.md",
+    "plans/responsive-sessions.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/b6c1396d0d/0/metadata.json",
+      "transcript": "/8e/b6c1396d0d/0/full.jsonl",
+      "compact_transcript": "/8e/b6c1396d0d/0/transcript.jsonl",
+      "content_hash": "/8e/b6c1396d0d/0/content_hash.txt",
+      "prompt": "/8e/b6c1396d0d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1156,
+    "cache_creation_tokens": 415012,
+    "cache_read_tokens": 7254504,
+    "output_tokens": 87965,
+    "api_call_count": 45
+  }
+}
