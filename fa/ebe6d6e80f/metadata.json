@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "faebe6d6e80f",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ios/cmux/App/AppState.swift",
+    "ios/cmux/Layout/LivePaneView.swift",
+    "ios/screenshots/claude-portrait.png",
+    "ios/screenshots/shell-portrait.png"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fa/ebe6d6e80f/0/metadata.json",
+      "transcript": "/fa/ebe6d6e80f/0/full.jsonl",
+      "compact_transcript": "/fa/ebe6d6e80f/0/transcript.jsonl",
+      "content_hash": "/fa/ebe6d6e80f/0/content_hash.txt",
+      "prompt": "/fa/ebe6d6e80f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 326,
+    "cache_creation_tokens": 44251,
+    "cache_read_tokens": 3476152,
+    "output_tokens": 19729,
+    "api_call_count": 12
+  }
+}
