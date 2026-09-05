@@ -1,0 +1,288 @@
+/efficient-fable look into mosh and what the benefits are and if we should implement it
+and then i want to improve on our setup to be able to load sessions whether claude or opencode properly “responsive” like https://apps.apple.com/us/app/moshi-herdr-tmux-on-ssh-mosh/id6757859949
+so end goal is updating so that all sessions always show properly on mobile including ability to scroll within the session without having to break UX
+
+---
+
+<task-notification>
+<task-id>a0b9fea3dcfe6930b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a0b9fea3dcfe6930b.output</output-file>
+<status>completed</status>
+<summary>Agent "Research mosh and Moshi app" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Research Report: mosh, Moshi, herdr, and alternatives for responsive terminal streaming
+
+## 1. mosh (mobile shell)
+
+- **What it is / transport**: Mosh runs `mosh-server` on the remote host and `mosh-client` locally; SSH is used only to bootstrap (authenticate and launch the server, which picks a UDP port in range 60000–61000), after which all traffic is UDP encrypted/authenticated with AES-128-OCB3 via the custom **State Synchronization Protocol (SSP)**. [mosh.org](https://mosh.org/), [Mosh paper (USENIX ATC'12)](https://www.usenix.org/conference/atc12/technical-sessions/presentation/winstein), [mosh-paper.pdf](https://mosh.org/mosh-paper.pdf)
+- **How state sync works — CONFIRMED**: The server runs a real terminal emulator; both server and client hold a "screen state" object (not a byte stream). SSP's job is to fast-forward the client's screen-state object to match the server's, skipping intermediate frames if needed, and controls its own "frame rate" so it never floods the network — it does not have to forward every byte the shell produces. [mosh-paper.pdf](https://mosh.org/mosh-paper.pdf), [GitHub issue #1087 on SSP](https://github.com/mobile-shell/mosh/issues/1087)
+- **Roaming/benefits**: client sends increasing sequence numbers plus heartbeats every ≤3s; the server retargets outgoing packets to whatever source IP sent the latest authenticated packet, giving seamless roaming across networks/sleep. Predictive local echo overlays keystrokes client-side before server ack. [mosh-paper.pdf](https://mosh.org/mosh-paper.pdf)
+- **Scrollback — CONFIRMED NO SUPPORT, long-standing**: GitHub **issue #2** ("Scrollback and alternate screen"), open since Oct 2011, is the canonical tracking issue; the FAQ explicitly points to it. Because mosh only ever syncs the *current* screen-state object, there is no host-side byte history to scroll into — this is architectural, not a missing feature. [Issue #2](https://github.com/mobile-shell/mosh/issues/2), [Issue #865 "Scrollback still not working in 1.3"](https://github.com/mobile-shell/mosh/issues/865), [Moshi's own explainer](https://getmoshi.app/articles/fix-mosh-scrollback)
+- **Mosh 1.4 (Oct 2022) changes**: added **24-bit/true color** support, OSC 52 clipboard integration, `--predict-overwrite` prediction mode, syslog logging — but did **not** add scrollback. Mouse reporting support predates 1.4 (added in 1.2.5, 2015). Unicode/UTF-8 support has been present from early on; no major Unicode change noted in 1.4. [mosh-1.4.0-released.html](https://mosh.org/mosh-1.4.0-released.html), [ChangeLog](https://github.com/mobile-shell/mosh/blob/master/ChangeLog), [Issue #649 24-bit color](https://github.com/mobile-shell/mosh/issues/649)
+- **Limitation vs. tmux control mode**: mosh does not support `tmux -CC` control mode because that expects a reliable stream channel; mosh's UDP/lossy-tolerant design is fundamentally incompatible with it. [HN discussion](https://news.ycombinator.com/item?id=25740217)
+
+## 2. Client-side mosh implementations for iOS/Swift and Go
+
+- **Blink Shell**: open source (github.com/blinksh/blink), licensed **GPLv3 with OpenSSL/iOS exceptions** (inherited from mosh's own license). Wraps a C++ port called **libmoshios** (plus libssh2, OpenSSL, protobuf, ios_system) rather than a pure-Swift reimplementation. [blinksh/blink](https://github.com/blinksh/blink), [blink.sh](https://blink.sh/), [Mosh license note](https://en.wikipedia.org/wiki/Mosh_(software))
+- **Licensing implication for merry**: mosh itself is **GPLv3**. Any embedded mosh client (Blink's libmoshios or the mosh C++ code directly) would pull GPLv3 obligations into the app unless isolated as a separate process/IPC boundary — a real constraint for a proprietary iOS app.
+- **Go implementations**: no native pure-Go mosh; found **`go-mosh`** (github.com/thyth/go-mosh) — a SWIG wrapper exposing mosh's C++ prediction/emulation engine to Go, itself GPLv3 since it links mosh code. Another Go wrapper (`github.com/artyom/mosh`) is just a CLI convenience wrapper around the system `mosh` binary, not a protocol reimplementation. No credible "gomosh" pure-protocol reimplementation was found — UNVERIFIED that one exists. [go-mosh](https://github.com/thyth/go-mosh), [artyom/mosh](https://pkg.go.dev/github.com/artyom/mosh)
+- **Termius**: claims mosh support in its product but no open-source implementation details found; UNVERIFIED internals.
+- **Embedding difficulty**: given GPLv3 + the need for a full server-side terminal-emulation engine (not just protocol code) plus SSP, embedding mosh client logic in a SwiftUI app is a substantial lift — realistically means vendoring Blink's libmoshios (C++) via a bridging layer, and accepting GPLv3 obligations, or writing your own SSP+terminal-emulation client from scratch (mosh has no thin client library).
+
+## 3. The Moshi app
+
+- **App**: "Moshi: herdr/tmux on SSH/MOSH", App Store id 6757859949, publisher **Moshi Tech Ltd**; also on Google Play (`app.getmoshi.android`). Docs/marketing site: getmoshi.app. [App Store](https://apps.apple.com/us/app/moshi-herdr-tmux-on-ssh-mosh/id6757859949), [Google Play](https://play.google.com/store/apps/details?id=app.getmoshi.android), [getmoshi.app](https://getmoshi.app/)
+- **What it does**: SSH/Mosh terminal client tuned for checking on AI coding agents (Claude Code, Codex, Cursor, Windsurf, Copilot, Aider) from a phone; a "Session Switcher" jumps between tmux windows or Herdr tabs; on-device Whisper voice-to-terminal; SSH keys in iOS Keychain with biometrics. [App Store listing](https://apps.apple.com/us/app/moshi-herdr-tmux-on-ssh-mosh/id6757859949)
+- **Scrollback mechanism — directly answers the pain point**: Moshi does **not** solve mosh's lack of scrollback via any clever protocol trick. It (a) keeps a small **in-app scrollback buffer** (configurable line limit, but only content seen since session start/reconnect — not host history), and (b) for real host-side history, relies on the **underlying multiplexer** (tmux copy-mode, or Herdr's own scrollback) and tunes touch gestures around whichever is detected: drag-to-scroll on the raw terminal forwards mouse-wheel events into tmux, and Moshi explicitly detects tmux copy mode to adapt touch scrolling. Its own docs state plainly: *"The mosh protocol does not transmit scrollback... only the current visible screen is restored"* on reconnect. [Scrolling docs](https://getmoshi.app/docs/scrolling), [Fix Mosh Scrollback article](https://getmoshi.app/articles/fix-mosh-scrollback)
+- **tmux vs Herdr framing**: Moshi's own guide says tmux "keeps processes alive and tells you nothing about them," while Herdr "tracks which agent panes are blocked, working, or done"; Herdr offers "standard scrollback" that's "clickable by design," plus purpose-built APIs (wait-on-status, read-pane-output) versus tmux's send-keys scripting. [tmux-or-herdr guide](https://getmoshi.app/guides/tmux-or-herdr)
+- **Terminal emulator / rendering tech**: **not disclosed** in any fetched docs page — UNVERIFIED which VT/ANSI rendering library Moshi uses.
+- **Who makes it**: Publisher is "Moshi Tech Ltd." No page found stating a relationship to the herdr authors (herdrdev/herdr on GitHub); Moshi's own comparison guide treats Herdr as a third-party integration, not its own product — **appears to be an independent company**, UNVERIFIED beyond that (no explicit "we are/aren't affiliated" statement found).
+
+## 4. herdr's remote/terminal-streaming APIs (github.com/herdrdev/herdr, herdr.dev)
+
+- **CLI streaming commands** (confirmed via herdr.dev/docs/cli-reference): 
+  - `herdr terminal session observe &lt;target&gt; [--cols N] [--rows N]` — read-only NDJSON stream of `terminal.frame` records (base64-encoded ANSI bytes), ending in `terminal.closed`; multiple observers allowed concurrently.
+  - `herdr terminal session control &lt;target&gt; [--takeover] [--cols N] [--rows N]` — writable stream; accepts NDJSON commands `terminal.input`, `terminal.resize`, `terminal.scroll`, `terminal.release`; single controller unless `--takeover`.
+  [CLI reference](https://herdr.dev/docs/cli-reference/)
+- **Socket API** (herdr.dev/docs/socket-api): NDJSON over local Unix sockets, default `~/.config/herdr/herdr.sock` (named sessions under `~/.config/herdr/sessions/&lt;name&gt;/herdr.sock`). `PaneInfo` carries scroll metrics: `{"offset_from_bottom": 12, "max_offset_from_bottom": 240, "viewport_rows": 30}`, with `offset_from_bottom == 0` meaning at-bottom. Event subscription `pane.scroll_changed` pushes these metrics on change (plus `pane.created/updated/closed/focused/moved/exited/agent_detected/output_matched/agent_status_changed`). [Socket API docs](https://herdr.dev/docs/socket-api/)
+- **Remote/mobile**: docs mention `herdr --remote workbox` (SSH-based attach to a remote herdr instance using local keybindings) and a `--handoff` flag for live session transfer to an updated server — but no herdr-native mobile/WebSocket client was found; no `herdr-client.sock` or `persistence-remote` terminology was found in fetched docs (UNVERIFIED / may not exist as named). No `pane.scroll` command name was found distinct from `terminal.scroll`; treat `pane.scroll` as UNVERIFIED naming vs. confirmed `terminal.scroll`.
+
+## 5. Prior art: server-side state + diff sync over a plain socket
+
+- **tmux control mode (`tmux -CC`)**: server-authoritative pane state pushed over a control protocol to a client (used by iTerm2); relevant precedent for "diff-sync over a normal reliable socket," but requires a reliable stream (works over SSH/WS, not suited to lossy mobile links the way mosh is). [HN thread](https://news.ycombinator.com/item?id=25740217)
+- **Eternal Terminal (ET)**: TCP-based persistent-session tool; includes a "headless terminal multiplexer" (HTM) that tracks tab/pane state so a client reattaching gets restored state — closer analog to what merry wants (state resync over TCP/WS) but ET itself doesn't do frame-diffing the way mosh does. [eternalterminal.dev](https://eternalterminal.dev/)
+- **xterm.js `addon-serialize`**: serializes an xterm.js buffer (screen + alt-screen + cursor) to a string/HTML blob for restore; directly relevant as a pattern for "reconstruct full terminal state from a snapshot," though it's a JS/web library, marked experimental. [addon-serialize](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize)
+- **ttyd, wezterm mux, ghostty**: no strong documentary evidence surfaced in this pass connecting them to a diff-sync architecture comparable to mosh/SSP — UNVERIFIED, would need dedicated follow-up if wanted.
+
+## 6. iOS terminal emulator libraries for SwiftUI
+
+- **SwiftTerm** (migueldeicaza/SwiftTerm): MIT-licensed, mature (~7 years, 1300+ commits, 32 releases), includes a UI-agnostic VT100/xterm engine plus iOS (UIKit) and macOS (AppKit) front-ends usable from SwiftUI via wrapping. Used by commercial SSH apps: Secure Shellfish, La Terminal, CodeEdit. Scrollback support specifics not documented in the fetched README excerpt — UNVERIFIED exact buffer limits, but the engine is a full terminal emulator so in-memory scrollback is expected to be supported at some configurable depth. [SwiftTerm README](https://github.com/migueldeicaza/SwiftTerm/blob/main/README.md), [Swift Package Index](https://swiftpackageindex.com/migueldeicaza/SwiftTerm)
+- No other actively-maintained Swift-native VT100 emulator libraries were surfaced in this pass; alternatives would mean wrapping a C library (e.g., libvterm) yourself — UNVERIFIED whether that's better than SwiftTerm for this use case.
+
+---
+**Notes on gaps**: Moshi's App Store page fetch failed with HTTP 429 on the direct URL (info instead pulled from search snippets/cache); herdr `pane.scroll` vs `terminal.scroll` naming and any `herdr-client.sock`/`persistence-remote` terms could not be confirmed as existing.</result>
+<usage><subagent_tokens>70101</subagent_tokens><tool_uses>19</tool_uses><duration_ms>106988</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0c9c737ab92321aa</task-id>
+<tool-use-id>toolu_01JhVZv1wh2m9tsh2xUXjUu3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a0c9c737ab92321aa.output</output-file>
+<status>completed</status>
+<summary>Agent "Map session rendering code paths" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Merry codebase map — pane/session rendering pipeline
+
+## 1. Pane/session content: phone → bridge → backend
+
+- **Poll loop**: `ios/cmux/Layout/WorkspaceLayoutView.swift:958-982` — `Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true)`. Every 3s: the focused surface is read every cycle, background surfaces every 5th cycle (~15s); `surface.list` is also refreshed every 5th cycle. `fetchContent` (`:985-1002`) dispatches to `appState.readSurfaceText` (or `readBrowserURL` for browser surfaces) and, for the focused Claude surface, also `loadClaudeTranscript`.
+- **Depths**: focused = `AppState.focusedHistoryLines = 1500` (`AppState.swift:660`), background = `50` (`WorkspaceLayoutView.swift:992-993`). On explicit `focusSurface(_:)` (`AppState.swift:491-510`) a deep read is fired immediately rather than waiting for the timer. Sending input schedules a 1.5s "activity probe" read (`AppState.swift:576-591`) so the working indicator reacts quickly.
+- **RPC call**: `AppState.readSurfaceText` (`AppState.swift:613-655`) sends `surface.read_text {surface_id, lines, workspace_id}`. A monotonically increasing `readSeq` per surface guards against out-of-order responses overwriting newer content (`:614-615, 631`). Trim/cap runs off-main (`Task.detached`) then applied on `MainActor`.
+- **Diff/working-heuristic**: `previous != content` decides whether to publish `surfaceContent[surfaceID]` (`:648-649`, avoids no-op `@Published` fires) and, only when `agentStatus[surfaceID] == nil` and the read depth is unchanged, whether to flip `workingSurfaces` (`:637-644`) — i.e. cmux surfaces get a "diff = working" heuristic, herdr surfaces (which carry `agent_status`) don't.
+- **Trim/cap**: `trimTerminalText` strips trailing per-line whitespace and trailing blank lines (`:807-818`); `capHistoryLines` caps to `maxHistoryLines = 5000` (`:822-828`) "so a UITextView can't lay out" arbitrarily long text.
+- **Bridge dispatch**: `bridge/internal/ws/handler.go:120-150` runs one goroutine reading `wsjson` commands and a select loop writing backend events + command responses. `dispatch` (`:154-160`) calls `be.Handle(method, params)`.
+- **cmux backend**: `bridge/internal/backend/cmux/cmux.go:167-181` proxies every method verbatim to cmux's own Unix socket except `claude.transcript`/`agent.transcript`, which is bridge-local (`:169-171, 183-222`). Per `shared/protocol.md:211-217`, cmux's own `surface.read_text` returns the last N rows **including terminal scrollback**, but "full-screen TUIs like claude-code repaint a fixed viewport and keep little/no terminal scrollback, so for those it returns roughly the visible screen" — a cmux limitation noted in `AppState.swift:605-612` too. Uncertain: exactly how cmux computes/wraps that text (columns, ANSI) is outside this repo (cmux app itself).
+- **herdr backend**: `bridge/internal/backend/herdr/translate.go:328-359` (`readText`) calls `pane.read {source:"recent", lines, strip_ansi:true}`. `clampReadLines` (`:361-370`) bounds `lines` to the pane's `Scroll.ViewportRows` **only when the pane is running a recognized agent** — because "a deeper read on an idle alternate-screen agent makes herdr scroll the user's live pane to page its history" (comment `:323-327`). Plain shells are not clamped, so herdr shells can still return real scrollback; agent panes (Claude, opencode, etc. under herdr) cannot — history for those must come from `claude.transcript`.
+- **Publishing**: `@Published var surfaceContent: [String:String]` (`AppState.swift:22`) and `@Published var workingSurfaces` (`:27`) are the two properties the polling loop feeds; `claudeTranscript`/`claudeCardText` (`:82,87`) are the transcript-derived ones (section 3).
+
+## 2. Rendering on the phone
+
+- **Not a terminal emulator.** `ios/cmux/Layout/TerminalTextView.swift` is a `UIViewRepresentable` wrapping a plain `UITextView` (`:15-74`), chosen over SwiftUI `Text`/`AttributedString` specifically for text selection and tappable links (`:4-7`). There is no ANSI/SGR color parsing anywhere in the iOS code — herdr strips ANSI server-side (`strip_ansi: true`, translate.go:349); cmux's own stripping is opaque to this repo. All text renders as flat white/opacity-scaled monospace (`TerminalTextRenderer.build`, `:339-349`): `UIFont.monospacedSystemFont(ofSize:weight:.regular)`, fixed size (`fontSize` param, scaled by `contentScale` in `PaneCardView.swift:142` — 9pt focused/7pt unfocused × scale). No Dynamic Type support (`fontSize` is a fixed CGFloat, not `.font(.body)`); no color at all, so exit-code coloring, diffs, syntax highlighting, etc. are all invisible.
+- **No column/row negotiation.** There is no `cols`/`rows`/resize RPC anywhere in `shared/protocol.md`, `AppState.swift`, or the bridge; the phone never tells the Mac its width. Text wrapping is whatever the backend PTY/terminal already produced (fixed-width rows from cmux/herdr), then UITextView further soft-wraps that at whatever width the card happens to have on screen — i.e. double-wrapping with no coordination. `TerminalTextRenderer.joinedAcrossWraps` (`:451-494`) is a heuristic hack that re-joins URLs that got hard-wrapped by the *upstream* PTY width, inferred from "longest row in this snapshot" (`:461-465`) — evidence the width mismatch is a known, worked-around problem, not solved.
+- **Follow-bottom / scroll**: `ScrollFollow.swift` — `autoScroll` toggles off only on a real (non-programmatic) scroll away from bottom (`follow`, `:43-45`); `bottomThreshold = 24pt` (`:14`). `TerminalTextView.Coordinator.apply` (`TerminalTextView.swift:163-219`) is where every new snapshot lands: it rebuilds the whole `NSAttributedString` off-main (`render`, `:147-161`) then does a **full replace** `tv.attributedText = attr` (`:183`) on every poll — not incremental/appended. Three scroll behaviors after that assignment:
+  1. If a text selection is active, skip applying entirely and retry later (`:167-171`).
+  2. If a search is active, jump to the current match, ignoring bottom-follow (`:191-203`).
+  3. Else: if `autoScroll`, `scrollToBottom` (`:205-206`, double-deferred to next runloop, `:221-234`); else if the new text is a strict superset ending in the old text (`isPrepend`, `:178-179` — i.e. history was prepended), shift offset by exactly the added height to keep the same lines on screen (`:207-218`); otherwise the raw scroll offset is left as-is against completely different content (see gap #2 below).
+- **Places that reset/jump scroll**: `pinToBottom` on every auto-follow poll (`:236-249`); `handleScrollRequest` explicit jump-to-bottom button (`PaneCardView.swift:176-192`, wired via `scrollToBottomRequest`); opening `TranscriptSheetView` always calls `loadClaudeTranscript(showsSpinner:true)` on `.onAppear` (`PaneCardView.swift:316-321`); `resetSessionState()` wipes `surfaceContent`/`claudeTranscript`/etc. entirely on bridge disconnect/switch (`AppState.swift:416-452`).
+
+## 3. Claude transcript path
+
+- `AppState.loadClaudeTranscript` (`AppState.swift:673-764`) sends `claude.transcript {surface_id, max_messages:300, known_fingerprint}`. A 15s timeout safety-net clears in-flight/loading flags if the bridge never answers (`:688-697`). `claudeTranscriptSeq`/`claudeTranscriptAppliedSeq` guard against out-of-order application, mirroring the `readSeq` pattern.
+- **Full-file-with-fingerprint-cache model, not a tail/push.** Bridge side (`bridge/internal/claude/transcript.go`): `Resolver.Render` (`:135-208`) resolves the surface → session → `.jsonl` path (5-strategy fallback documented in `:210-235`, backed by cmux's hook store `~/.cmuxterm/claude-hook-sessions.json`, `hookstore.go:13-48`), computes a `fingerprint` from path+mtime+size+maxMessages (`:344-348`), and if it equals the client's `known_fingerprint` returns `{unchanged:true}` with no text — "cheap to poll every cycle." Otherwise it reads the **tail** of the file (`readTail`, bounded to `maxTranscriptFileBytes = 32MB`, `:26,354-369`), renders only the last `max_messages` (default 200, client-capped 2000, `cmux.go:225-234`) turns via `renderJSONL` (`:447-502`), and caps the rendered text to `maxRenderBytes = 128KB` tail (`:429-442`) — "so a long session can't produce a payload that blows past WebSocket message-size limits." A small 8-entry render cache (`:35-71`) avoids re-rendering on repeated identical reads.
+- iOS composes the card as transcript + a `liveScreenDivider` + the live terminal mirror (`recomposeClaudeCard`, `AppState.swift:774-787`), and `cardText(for:)` (`:797-802`) switches per-surface between `claudeCardText` (Claude) and `surfaceContent` (everything else) based on `surface.isClaudeAgent` **currently**, not historically.
+- **Dispatch**: no special-case remains in `ws/handler.go` — it's routed generically through `be.Handle`; the special-case lives inside each backend (`cmux.go:168-171`, `herdr/translate.go:87-88`).
+- **isClaudeAgent / resume_binding**: `Surface.agentKind` comes from `resume_binding.kind` (`AppState.swift:1455`), `isClaudeAgent = agentKind == "claude"` (`:1446`). `agentStatus` (`:1456`, herdr only) is separate and drives the working indicator when present.
+
+## 4. opencode / other agents
+
+- **Not present on this branch (`rename/merry`) or `main`.** `rg -i opencode` over the working tree returns nothing outside `.claude/worktrees/*`.
+- It **does** exist on `worktree-opencode-sessions` (commit `7b1b8e3 feat: read opencode sessions like Claude Code sessions`, `git show worktree-opencode-sessions --stat`): new `bridge/internal/opencode/{opencode.go,processes.go}` + `bridge/internal/transcriptrender/render.go` (shared render code Claude was refactored onto), plus `bridge/internal/ws/transcript.go` (281 lines) and edits to the *old* `ws/handler.go`/`ws/server.go`.
+- Approach (from the commit message and `opencode.go:1-100`): detects opencode via the tty↔process table (`processes.go`), not by title/text; resolves *which* session via the surface's title (`"OC | &lt;title&gt;"`) matched against opencode's SQLite DB (`~/.local/share/opencode/opencode.db`), queried by shelling out to the `sqlite3` CLI (explicitly avoiding cgo/pure-Go SQLite). Untitled sessions report `opencode_unidentified` and render empty rather than guessing.
+- **Important gap**: this branch was cut from `28d86f1` (before `07bb0d4 feat: herdr backend, composite cmux+herdr bridge...`). It predates the current `backend.Backend` interface / `multi` package entirely and edits the old monolithic `ws/handler.go`/`ws/server.go` directly. It has **not** been rebased onto the herdr/multi backend architecture — merging it today means re-deriving it as a third backend-agnostic transcript source (like `claude.Resolver`) rather than a simple merge.
+
+## 5. Push channel / message limits
+
+- Only four push types exist (`bridge/internal/backend/backend.go:110` `Hub.Broadcast`, fanned out in `ws/handler.go:125-131`): `notification.created`, `backend.connected`/`disconnected`/`changed`, and `surface.updated` (herdr's `agent_status`/title changes, `herdr/backend.go:422`). **There is no push for raw pane/terminal output changes at all** — `surface.read_text` is polling-only; no `events.stream` method exists anywhere in the repo.
+- Message-size limits: incoming (phone→bridge) capped at `maxIncomingMessageBytes = imagepaste.MaxImageBytes/3*4 + 64*1024` (`ws/handler.go:17-20`), enforced via `conn.SetReadLimit(...)` (`:71`) because "the library's default read limit is 32 KiB." Outgoing (bridge→phone) has no explicit Go-side limit; the iOS client raises `task.maximumMessageSize = 8 * 1024 * 1024` (`BridgeClient.swift:195`) specifically because "large payloads like claude session transcripts... can exceed the default 1 MiB." `protocol.md:292-295` separately notes a ~16MB WebSocket transport ceiling for pasted images.
+
+## 6. Concrete layout/scroll UX gaps
+
+- **Full-text replace every poll, not incremental.** `TerminalTextView.Coordinator.apply` reassigns `tv.attributedText` wholesale on every 3s cycle even when only the tail changed (`TerminalTextView.swift:183`); the `isPrepend` anchor logic (`:178-179, 207-218`) only recognizes the "old text is a suffix of new" case (history prepended while scrolled up). Any other kind of content substitution is not scroll-anchored.
+- **Claude-mode toggle jumps the reader.** `cardText(for:)` (`AppState.swift:797-802`) switches the *entire* text source between `claudeCardText` and `surfaceContent` the instant `isClaudeAgent` flips (Claude Code exits/starts in a surface). This is neither an append nor a suffix relation, so a user scrolled up when that happens keeps their pixel offset applied to unrelated content — a silent scroll-position corruption, not caught by the `isPrepend` heuristic.
+- **No scrollback for agent alt-screens.** Both backends agree Claude/opencode-style full-screen TUIs return "roughly the visible screen" for `surface.read_text` regardless of `lines` (`protocol.md:211-222`; `herdr/translate.go:323-327,361-370`). History for those surfaces exists *only* via `claude.transcript`; a non-Claude agent (or opencode, absent on this branch) has literally nothing behind its visible screen.
+- **No color/ANSI at all.** `TerminalTextRenderer.build` hardcodes `UIColor.white.withAlphaComponent(...)` for every character (`TerminalTextView.swift:346`) — no SGR parsing, so error/diff/success coloring an agent relies on is invisible on the phone.
+- **No PTY width negotiation.** No cols/rows RPC exists; wrapping happens twice (upstream PTY, then UITextView at card width), producing the wrapped-URL workaround at `TerminalTextView.swift:451-494` and presumably ragged wrapping elsewhere in normal output.
+- **Working-indicator heuristic is a diff, not a signal**, for any backend without `agent_status` (i.e. cmux) — `AppState.swift:637-644`: a surface that repaints without new bytes (a spinner) reads as "working," and identical output across a poll boundary reads as idle even mid-turn.
+- **Dynamic Type / accessibility**: font sizes are hardcoded CGFloat values throughout `PaneCardView.swift` (`:142`) and `TerminalTextView` callers (`TranscriptSheetView`, `PaneCardView.swift:386`), not tied to `UIFontMetrics`/Dynamic Type.
+- **Tap targets**: `jumpToBottomButton` is 32×32pt (`PaneCardView.swift:176-192`) — under Apple's 44pt HIG minimum.
+- **Landscape-only assumption is stale**, not current. `plans/swipe-to-edit-transcript.md:16` and `plans/ios-layout-view.md` both describe/assume a landscape-locked app, but `Info.plist:50-52` declares portrait + both landscapes, and `WorkspaceLayoutView.swift:627-695` has real portrait/landscape branches (`isLandscape = geo.size.width &gt; geo.size.height`, since iPhones report `.compact` in both, `:629-631`). The plan docs are outdated relative to the code.
+- **Pane frame math** (herdr `paneList`, `translate.go:450-492`) reports pixel/container frames purely for herdr's own tab layout; the phone's own `WorkspaceLayoutView` layout (landscape 65/35 split `:650-670`, portrait stacked with `tileWidth = max(150, size.width*0.44)` `:675-695`) is independent of that and only ever shows one focused surface + a scrollable strip of secondaries — it does not attempt to mirror the Mac's actual pane geometry.
+
+## 7. Plans / protocol docs
+
+- `plans/ios-layout-view.md` is an early, since-superseded implementation plan for `WorkspaceLayoutView` (a `NavigationStack`+`LazyVGrid` skeleton, incremental volume/speech wiring). Current code has diverged completely (custom landscape/portrait split layout, no `NavigationStack`) — treat this file as historical, not current design.
+- `plans/swipe-to-edit-transcript.md` is a short (16-line) TODO for a swipe-to-edit speech-transcript-to-keyboard flow (`TranscriptEditorView.swift`), explicitly noting the (now stale) landscape-only assumption needing relaxation. Unclear from repo state whether this was implemented — `TranscriptEditorView.swift` exists (115 lines) but I did not verify it against every checkbox.
+- `shared/protocol.md` (v2, 320 lines): backend abstraction (`cmux`/`herdr`/`cmux+herdr` composite with namespaced ids), auth via Bearer token, push events (`notification.created/cleared`, `backend.connected/disconnected/changed`, `surface.updated`, `connected`), and the full command list — workspaces, surfaces (`read_text`, `send_text`, `send_key`, `paste_image`, `paste_file`), `claude.transcript`/`agent.transcript`, panes, notifications, `system.ping`. This is the authoritative wire contract and matches what's implemented on `rename/merry` (no opencode methods).
+
+**Uncertain / not verified in this pass**: exact ANSI/plain-text behavior of cmux's own `surface.read_text` (cmux app is outside this repo); whether `TranscriptEditorView.swift` fully implements the swipe-to-edit plan; whether `worktree-opencode-sessions`' `ws/transcript.go` design would map cleanly onto the current `backend.Backend`/`claude.Resolver` split without further work.</result>
+<usage><subagent_tokens>130746</subagent_tokens><tool_uses>45</tool_uses><duration_ms>212827</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a697ded9800e99c8f</task-id>
+<tool-use-id>toolu_01F3P7h9TR1xYLFRNPRLX27g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a697ded9800e99c8f.output</output-file>
+<status>completed</status>
+<summary>Agent "Probe cmux and herdr streaming APIs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Report: Real Terminal View — herdr vs cmux
+
+Both daemons running live on this Mac: **herdr** `~/.config/herdr/herdr.sock` (v0.8.2, protocol 20, confirmed via `ping`), **cmux** app (pid 25602) + `cmux-bridge` (pid 72201) on `~/.local/state/cmux/cmux-501.sock` per `~/.config/cmux-bridge/config.json` (`socket_password:""`, `backend:"all"`). Bridge source: `bridge/internal/socket/client.go`, `bridge/internal/backend/{cmux,herdr}/`, `shared/protocol.md`.
+
+### herdr
+
+**1. Content read APIs.** `pane.read {pane_id, source, lines?, format?, strip_ansi?, raw?}`. `source` ∈ `visible|recent|recent_unwrapped|detection` (CLI shows dash, wire uses underscore for the middle one). Verified via `herdr pane read w1:p2 --source recent --lines 10 --format text|ansi`. Result shape (from `herdr api schema --json`, `PaneReadResult`): `{pane_id, workspace_id, tab_id, source, format, text, revision, truncated}` — no cursor field anywhere in the schema (only occurrence of the string "cursor" is the agent-kind enum value for Cursor CLI).
+
+**2. ANSI/colors.** Yes — `--format ansi` returns real SGR/color escapes; verified output contained `\x1b[38;5;10m` etc. `--format text` strips them. Our bridge's herdr translation (`translate.go:349`) currently hardcodes `strip_ansi:true`, i.e. today it throws this away.
+
+**3. Scrollback / live-pane disturbance.** `source:"recent"+lines:N` includes host scrollback for plain shell panes. **Confirmed gotcha** (already documented in `plans/herdr-backend.md` from an earlier session, and unchanged in v0.8.2): for an *idle* recognized agent pane, a deep `recent` read makes herdr physically scroll the pane to page history then back — visibly disturbs the user. Bridge already clamps `lines` to `scroll.viewport_rows` for agent panes; I did not repeat that live test (would disturb a pane) and relied on the prior verified finding + source.
+
+**4. Scroll/cursor/size fields.** Live from `herdr pane list` / `herdr api snapshot`: `scroll:{offset_from_bottom, max_offset_from_bottom, viewport_rows}` per pane. No cols field on pane directly; cell dimensions come from `layouts[].panes[].rect:{x,y,width,height}` (cells). No cursor-position field anywhere in the schema.
+
+**5. Push/stream of output.**
+- `events.subscribe` global kinds include `pane_output_changed` in the `EventKind` enum, but it's **not actually subscribable** — I live-tested `events.subscribe {subscriptions:[{"kind":"pane_output_changed"}]}` and the server closed the connection (`BrokenPipeError`) right after. Subscribable kinds are only `pane.output_matched` (pattern-match via `wait-output`), `pane.agent_status_changed`, and **`pane.scroll_changed`** `{pane_id, workspace_id, scroll:{offset_from_bottom, max_offset_from_bottom, viewport_rows}}` (new finding — scroll-position push exists and is cheap, could drive a live scroll indicator).
+- **Real frame streaming exists**: `herdr terminal session observe &lt;pane_id&gt; --cols N --rows N` (CLI subprocess over the separate `herdr-client.sock` wire protocol). Live-tested against `w1:p2`, captured NDJSON records shaped:
+  ```json
+  {"type":"terminal.frame","seq":1,"width":80,"height":24,"encoding":"ansi","full":true,"bytes":"&lt;base64 PTY bytes&gt;"}
+  ```
+  Decoded `bytes` is raw terminal output including cursor-position/clear escapes (`\x1b[2J\x1b[1;1H...`) — genuinely a renderable ANSI byte stream, not a structured grid. `herdr terminal session control &lt;target&gt; [--takeover] --cols --rows` is the write-side (input + resize); not exercised (would be invasive). This is the path to a real terminal view.
+
+**6. Resize.** `pane.resize {direction, amount, pane_id}` only resizes a **split ratio**, not terminal cols/rows (confirmed via schema `PaneResizeParams`). True terminal-cell resize appears to live only in `terminal session control --cols/--rows` (untested, control-only). No standalone `pane.set_size`/cols-rows RPC found in the schema.
+
+### cmux
+
+**1. Content read APIs.** Only `surface.read_text {surface_id, lines?, scrollback?, workspace_id?}` (per `shared/protocol.md` and live testing) — no `surface.read_screen`, `surface.stream`, `surface.resize`, `surface.cursor`, `events.subscribe`, `system.methods`/`rpc.list`; all live-tested and returned `{"ok":false,"error":{"code":"method_not_found"}}`, confirming the socket has a fixed method table with none of these.
+
+**2. ANSI/colors.** **No.** Live test on a plain shell surface (`790F0B91-…`, workspace "npm run start", no `resume_binding`) with `surface.read_text {lines:5, format:"ansi"}` returned identical plain text to the no-format call — `format` is silently ignored, no ESC bytes anywhere in `text` or `base64` (which is just base64 of the same plain text). No ANSI path exists in this API.
+
+**3. Scrollback / live-pane disturbance.** `surface.read_text {lines:200}` on that same non-agent surface returned 79 lines of history including a login banner and old proxy logs well beyond one screen — confirms **real scrollback is returned directly**, no pane scrolling side-effect (unlike herdr's agent-pane gotcha). This is consistent with `protocol.md`'s note that full-screen TUIs (e.g. Claude Code) keep no scrollback so `read_text` only returns the visible screen for those.
+
+**4. Scroll/cursor/size fields.** None found. `surface.read_text`'s result keys are `{workspace_ref, surface_ref, window_ref, surface_id, workspace_id, window_id, text, base64}` — no scroll offset, no cursor, no cols/rows. `pane.list`/`surface.list` (used by the app for layout) carry `pixel_frame`/geometry but not a live scroll position.
+
+**5. Push/stream.** No socket-level event subscription: `events.subscribe` → `method_not_found`. The bridge's only "push" for cmux is a 1s poller (`bridge/internal/poller/poller.go`) over `notification.list`, fanned out as `notification.created`. `~/.cmuxterm/events.jsonl` is a local telemetry log the cmux app writes for itself (categories `agent`, `feed`, hooks, etc.) — not a socket API and not terminal-content-bearing; not consumable by the bridge as a push channel. No `surface.updated`/output-diff pushes exist for cmux (that capability is herdr-only per `protocol.md`: `Capabilities{AgentStatus:false}` for cmux in `backend/cmux/cmux.go`).
+
+**6. Resize.** No resize method exists at all (`surface.resize` → `method_not_found`); not found in `protocol.md`'s method list either.
+
+### Bottom line
+Neither daemon's *documented phone-facing vocabulary* streams frames today — both are poll-based text (`surface.read_text` / `pane.read`), matching `plans/herdr-backend.md`'s "no output push" conclusion, now reconfirmed live. But **herdr has an underlying private client-socket protocol** (`herdr terminal session observe/control`) that does exactly what's wanted — base64 ANSI PTY-byte frames with seq numbers, cols/rows, plus an input/resize control channel — reachable today as a CLI subprocess, not yet wired into the bridge (flagged as future work in the herdr plan doc). cmux exposes no equivalent; its socket API is a small, fixed, ANSI-free, resize-free, cursor-free command set with no event stream, so a real terminal view for cmux surfaces isn't reachable without either a new cmux-side API or continuing to synthesize from polled plain text.
+
+Not independently re-verified this session (relied on cited source/schema evidence rather than a fresh live probe): the "agent pane deep-scroll" gotcha for herdr `recent` reads, and `terminal session control`'s resize/input behavior (both would disturb a live pane). cmux's full public GitHub docs were not fetched — conclusions rest on the local socket method table and `bridge/internal/socket/client.go` + `shared/protocol.md`, which is internally consistent and exhaustive against live `method_not_found` probes.</result>
+<usage><subagent_tokens>113948</subagent_tokens><tool_uses>42</tool_uses><duration_ms>214077</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a49caaa784455f454</task-id>
+<tool-use-id>toolu_013bVRSwKPkGpPGRY5RYoLxd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a49caaa784455f454.output</output-file>
+<status>completed</status>
+<summary>Agent "iOS scroll anchoring fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Branch: `worktree-agent-a49caaa784455f454` (the worktree's actual current branch — the task description mentioned `rename/merry` but that's the main checkout's branch, not this worktree's).
+Commit: `7f5a513` — "fix: anchor terminal scroll position across every text replacement, not just prepends"
+
+### Files changed
+
+**`ios/cmux/Layout/ScrollFollow.swift`** (+43 lines, end of file)
+Added `ScrollFollow.Anchor` enum (`followBottom`, `keepOffset`, `shiftByAddedHeight`, `keepDistanceFromBottom`) and `ScrollFollow.anchor(autoScroll:oldText:newText:) -&gt; Anchor`. Rule order: `autoScroll` → `.followBottom`; empty old text → `.followBottom`; identical text → `.keepOffset`; `newText.hasPrefix(oldText)` (append) → `.keepOffset`; `newText.hasSuffix(oldText)` (prepend) → `.shiftByAddedHeight`; else → `.keepDistanceFromBottom`. Single linear `hasPrefix`/`hasSuffix` scans only, no quadratic work.
+
+**`ios/cmux/Layout/TerminalTextView.swift`** (`Coordinator.apply`, ~lines 172-249)
+Before the `attributedText` swap: capture `oldText`, `viewportHeight = tv.bounds.height`, `oldHeight`, `oldOffset`, `distanceFromBottom = max(0, oldHeight - (oldOffset.y + viewportHeight))`, and compute `anchor` via `ScrollFollow.anchor`. Selection-active and search-active early returns are untouched. After the swap, a `switch anchor` replaces the old `if autoScroll {...} else if isPrepend {...}`:
+- `.followBottom` → existing `scrollToBottom(tv)`
+- `.keepOffset` → `layoutIfNeeded()`, clamp `oldOffset.y` to `max(0, newHeight - viewportHeight)`, set inside `programmatically {}`
+- `.shiftByAddedHeight` → unchanged delta logic from before
+- `.keepDistanceFromBottom` → `layoutIfNeeded()`, target `y = max(0, newHeight - viewportHeight - distanceFromBottom)`, set inside `programmatically {}`
+
+**`ios/cmux/Layout/PaneCardView.swift`** (`jumpToBottomButton`, ~lines 176-198)
+Added `.frame(width: 44, height: 44).contentShape(Rectangle())` after the existing 32×32 visual stack, so the tappable area meets the 44pt minimum while the puck stays visually small. The `atBottom`/`onAtBottomChanged`/`terminalAtBottom` visibility gating was not touched.
+
+**`ios/scripts/test-scroll-follow.swift`** (+20 lines)
+Nine new `check(...)` cases covering all four anchor rules plus edge cases: autoScroll-true from non-empty and empty text, empty-old-text bootstrap, identical text, append, prepend, an unrelated repaint, a changed middle line, and a trimmed-whitespace line (verified these are genuinely neither prefix nor suffix relations before writing them — an earlier draft of the whitespace test accidentally satisfied `hasPrefix`, so I replaced it).
+
+### Verify
+
+- `cd ios &amp;&amp; ./scripts/run-tests.sh` → all three suites (`text-search`, `scroll-follow`, `image-scaling`) end in `all passed`, including all 9 new `ScrollFollow.anchor` checks.
+- `cd ios &amp;&amp; xcodebuild -project cmux.xcodeproj -target cmux -sdk iphonesimulator26.5 -configuration Debug build 2&gt;&amp;1 | tail -5` → ends in `** BUILD SUCCEEDED **` (no disk-space retry needed).
+- `git diff --stat` (before commit): 4 files changed, 106 insertions(+), 8 deletions(-). Full diff re-read for correctness — confirmed no renamed properties, no changes to polling/transcript/Claude composition/renderer/bridge code.
+
+### Notes / things I chose not to do further
+
+- Per the task's explicit instruction for this commit, I did **not** add a Co-Authored-By trailer, even though the session's default attribution system-reminder asks for one — the task instructions for this specific commit were explicit ("Do NOT add any Co-Authored-By or other trailers") and more specific to this bounded change.
+- `.keepOffset`'s clamp only bounds `y`; `x` is passed through unchanged from `oldOffset.x` since this is a vertically-scrolling text view and `x` is always 0 in practice — not worth a separate clamp.
+- I did not change the button's outer `.padding(.trailing, 10).padding(.bottom, 10)` placement; widening the button's own frame to 44×44 pulls the visual puck ~6pt off the absolute corner it used to touch, which seemed like the right tradeoff (matches "the visual can stay small" instruction) rather than also adjusting padding to compensate.</result>
+<usage><subagent_tokens>83138</subagent_tokens><tool_uses>18</tool_uses><duration_ms>171822</duration_ms></usage>
+<worktree><worktreePath>/Users/marlin/cmux-companion/.claude/worktrees/agent-a49caaa784455f454</worktreePath><worktreeBranch>worktree-agent-a49caaa784455f454</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aafc9265898ec552f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/aafc9265898ec552f.output</output-file>
+<status>completed</status>
+<summary>Agent "Port opencode transcripts to backends" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Work complete. Branch `worktree-agent-aafc9265898ec552f`, commit `1a91ca8` (in worktree `/Users/marlin/cmux-companion/.claude/worktrees/agent-aafc9265898ec552f`).
+
+## Summary
+
+**Ported from `worktree-opencode-sessions` (7b1b8e3) verbatim, no modification needed:**
+- `bridge/internal/transcriptrender/render.go` + `render_test.go`
+- `bridge/internal/opencode/opencode.go`, `opencode_test.go`, `processes.go`, `wal_test.go`
+
+**Refactored `bridge/internal/claude/transcript.go`** onto `transcriptrender` (the branch's diff applied cleanly — source was byte-identical modulo one whitespace nit, test file identical); removed the now-duplicate `TestCapTail` from `transcript_test.go`. All existing claude tests still pass.
+
+**New dispatcher** `bridge/internal/transcripts/transcripts.go` (+ `transcripts_test.go`, 10 tests): `Dispatcher.Render(Request) (Result, error)`. `Request` carries `SurfaceID`, `ResumeBinding`, `SurfaceTitle`, `Directory`, `TTY`, `MaxMessages`, `KnownFingerprint`. Dispatch: `kind=="claude"` → `claude.Resolver`; `kind=="opencode"` with `checkpoint_id` → direct `opencode.Store` render/fingerprint (`source:"resume_binding"`); `kind=="opencode"` with no id, or no binding at all but a `TTY` proven to run an opencode process → title+cwd match via `opencode.Store.ResolveSession` (`source:"opencode_title_cwd"` / `"opencode_unidentified"`). `transcripts.Encode` keeps every legacy field name and adds `agent_kind`/`session_title`.
+
+**Backend hook-ins:**
+- `bridge/internal/backend/cmux/cmux.go` — `Backend.transcript()` (line ~190) now: fetches `resume_binding` via `surfaceBinding()`, cross-workspace fallback via new `terminal()`/`terminalTable()` (`debug.terminals`, 2s TTL cache, lines ~254-320), and for a binding-less surface fills `req.TTY`/`SurfaceTitle`/`Directory` from the terminal table before calling `b.dispatcher.Render(req)`.
+- `bridge/internal/backend/herdr/translate.go` `transcript()` (line ~500) — now calls `b.dispatcher.Render(transcripts.Request{...})`; `surfaceRecord()` (translate.go:222-244) already emitted `resume_binding.kind = p.Agent` (e.g. `"opencode"`) and `checkpoint_id = agent_session.Value` for any herdr-reported agent, so no change was needed there — verified against the brief's live observation (pane `agent=opencode`, `agent_session.source="herdr:opencode"`).
+- `backend/herdr/backend.go` and `backend/cmux/cmux.go` structs: `resolver *claude.Resolver` → `dispatcher *transcripts.Dispatcher`.
+
+**iOS** (`ios/cmux/App/AppState.swift`, `ios/cmux/Layout/WorkspaceLayoutView.swift`): added `Surface.hasTranscript` (line ~1452) and switched the exact call sites named in the brief (AppState.swift:504, 799; WorkspaceLayoutView.swift:709, 719, 999) from `isClaudeAgent` to `hasTranscript`; `isClaudeAgent` and all `claudeTranscript*`/`claudeCardText` names left untouched. No hardcoded "Claude" title exists in `TranscriptSheetView` (header says generic "Conversation history"), so no `agent_kind`-based label change was needed there.
+
+**shared/protocol.md**: `agent.transcript` section rewritten to document `agent_kind`/`session_title` and opencode's two resolution paths (resume_binding vs. tty+title) for both backends.
+
+## Verification
+
+- `go build ./... &amp;&amp; go vet ./... &amp;&amp; go test ./...` — all pass (bridge).
+- Live check: `go test ./internal/opencode/ -run TestLiveOpencodeRenderManual -v` against the real `~/.local/share/opencode/opencode.db` (1.1GB) rendered a real session (`ses_fb8c354e0ffe38cZ4EikAzKFob`, 4995 bytes) correctly; confirmed no `-wal`/`-journal`/mtime change afterward (read-only). Test file removed after.
+- `cd ios &amp;&amp; ./scripts/run-tests.sh` — all suites pass.
+- `cd ios &amp;&amp; xcodebuild -project cmux.xcodeproj -target cmux -sdk iphonesimulator26.5 -configuration Debug build 2&gt;&amp;1 | tail -5` → `** BUILD SUCCEEDED **`.
+
+## Left out / deviations
+
+- iOS does not implement the branch's "ask about any terminal surface, re-poll every 15s" reclassification — the brief scoped iOS changes to just the `hasTranscript` gating, which I followed literally; a bare cmux opencode surface with no `resume_binding.kind` will not show transcript UI until cmux reports one (via `cmux hooks opencode install`), even though the bridge-side tty/title fallback can already answer such a surface's `agent.transcript` call directly.
+- Did not verify `debug.terminals` against a live cmux socket (no live cmux daemon touch was in scope, and the brief said not to restart/replace the running daemon or send terminal input); ported the RPC name and cache TTL as-is from the branch. If cmux's real socket doesn't support it, the cmux-only tty/title fallback silently degrades to "unidentified" — no regression to existing Claude or herdr-opencode paths.</result>
+<usage><subagent_tokens>207203</subagent_tokens><tool_uses>109</tool_uses><duration_ms>664237</duration_ms></usage>
+<worktree><worktreePath>/Users/marlin/cmux-companion/.claude/worktrees/agent-aafc9265898ec552f</worktreePath><worktreeBranch>worktree-agent-aafc9265898ec552f</worktreeBranch></worktree>
+</task-notification>
