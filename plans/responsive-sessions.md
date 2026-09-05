@@ -119,7 +119,7 @@ pane into any grid we ask for.
 
 ## Plan
 
-### Phase A — scroll never jumps (phone only) — in progress
+### Phase A — scroll never jumps (phone only) — done
 
 `ScrollFollow.anchor(autoScroll:oldText:newText:)` → `.followBottom` /
 `.keepOffset` (append) / `.shiftByAddedHeight` (prepend) /
@@ -127,7 +127,7 @@ pane into any grid we ask for.
 `TerminalTextView.Coordinator.apply`; 44 pt jump-to-bottom target. Pure
 rules tested in `ios/scripts/test-scroll-follow.swift`.
 
-### Phase B — opencode history on both backends — in progress
+### Phase B — opencode history on both backends — done
 
 Port `internal/opencode` + `internal/transcriptrender` from
 `worktree-opencode-sessions` behind a backend-agnostic transcript dispatcher
@@ -136,7 +136,7 @@ from `agent_session`. cmux: `resume_binding` if the opencode hooks are
 installed, else the branch's tty/process + `"OC | <title>"` match. Phone:
 `Surface.hasTranscript` replaces `isClaudeAgent` at the gating sites.
 
-### Phase C — live frames + a real emulator (herdr first)
+### Phase C — live frames + a real emulator (herdr first) — bridge done, phone in progress
 
 Bridge:
 - New commands `surface.frames.subscribe {surface_id, cols?, rows?}` /
@@ -166,7 +166,7 @@ Phone:
 - Fallback: surfaces without frames (cmux, or herdr unavailable) render the
   polled text in the same container.
 
-### Phase D — cmux parity (upstream)
+### Phase D — cmux parity (upstream) — proposal drafted in `plans/cmux-frames-proposal.md`
 
 Propose to cmux: `surface.read_screen {format:"ansi"}` and a socket
 subscription that streams output frames (or lets the bridge attach to the
