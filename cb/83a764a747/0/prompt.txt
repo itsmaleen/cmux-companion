@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bj6nxuiqy</task-id>
+<tool-use-id>toolu_016N2Mwnd68f5tJNbeshvevN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/bj6nxuiqy.output</output-file>
+<status>failed</status>
+<summary>Background command "Get the Simulator window position and size for a scripted click" failed with exit code 1</summary>
+</task-notification>
