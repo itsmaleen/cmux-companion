@@ -67,6 +67,7 @@ func (b *Backend) Info() backend.Info {
 			Browser:       true,
 			AgentStatus:   false,
 			Notifications: "polled",
+			Frames:        false, // cmux has no frame stream; surface.frames.subscribe answers `unsupported`.
 		},
 	}
 }

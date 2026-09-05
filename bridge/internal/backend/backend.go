@@ -34,6 +34,10 @@ type Capabilities struct {
 	// Notifications: "polled" (the runtime keeps a list the bridge polls) or
 	// "push" (the bridge synthesises them from runtime events).
 	Notifications string `json:"notifications"`
+	// Frames: the runtime can stream a surface's live terminal frames
+	// (`surface.frames.subscribe`), so the phone can render it with a real
+	// terminal emulator instead of polling `surface.read_text`.
+	Frames bool `json:"frames"`
 }
 
 // Info identifies the runtime behind the bridge.
@@ -72,6 +76,47 @@ type Backend interface {
 	Handle(method string, params map[string]any) (json.RawMessage, error)
 	// Hub is where this backend publishes push events.
 	Hub() *Hub
+}
+
+// Frame is one terminal repaint, relayed to the phone as a `surface.frame`
+// push. The first frame of a stream is always Full; later ones are deltas in
+// the source runtime's own encoding (herdr: raw PTY bytes it crops/pads to
+// the requested grid).
+type Frame struct {
+	SurfaceID string
+	Seq       int
+	Full      bool
+	Width     int
+	Height    int
+	Encoding  string
+	Bytes     string // still base64; passed through to the phone untouched
+}
+
+// FrameInfo is the grid a frame stream actually settled on, reported back as
+// the surface.frames.subscribe result.
+type FrameInfo struct {
+	Width, Height int
+}
+
+// FrameEvent is one item off a frame stream: a Frame to relay, or a terminal
+// Ended reason ("closed", "error", "backpressure") — exactly one is set. A
+// stream that is torn down by the caller (ctx cancelled) sends nothing
+// further; the caller already knows why.
+type FrameEvent struct {
+	Frame *Frame
+	Ended string
+}
+
+// FrameSource is implemented by backends that can stream a surface's live
+// terminal frames (herdr; cmux has no such stream). The WebSocket handler
+// type-asserts for it and answers `surface.frames.subscribe` with an
+// `unsupported` error when a backend doesn't implement it.
+type FrameSource interface {
+	// Frames starts a frame stream for surfaceID at cols x rows (0 for either
+	// means the surface's native size). The returned channel is closed when
+	// the stream ends; cancel ctx to stop it early. A synchronous error
+	// (`not_found`, `frames_error`) means no stream was started at all.
+	Frames(ctx context.Context, surfaceID string, cols, rows int) (<-chan FrameEvent, FrameInfo, error)
 }
 
 // Hub fans push events out to WebSocket clients. Slow consumers drop events

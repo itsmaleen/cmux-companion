@@ -57,6 +57,7 @@ func (b *Backend) Info() backend.Info {
 		c := m.Backend.Info().Capabilities
 		caps.Browser = caps.Browser || c.Browser
 		caps.AgentStatus = caps.AgentStatus || c.AgentStatus
+		caps.Frames = caps.Frames || c.Frames
 		notif[c.Notifications] = true
 	}
 	switch {
@@ -215,6 +216,56 @@ func (b *Backend) Handle(method string, params map[string]any) (json.RawMessage,
 		b.mu.Unlock()
 	}
 	return prefixResult(kind, raw)
+}
+
+// Frames implements backend.FrameSource, routing by the namespaced
+// surfaceID's prefix to the member that owns it and re-namespacing the
+// Frame.SurfaceID of everything that member emits. A member that doesn't
+// itself implement FrameSource (cmux) answers `unsupported`, exactly as a
+// standalone instance of it would.
+func (b *Backend) Frames(ctx context.Context, surfaceID string, cols, rows int) (<-chan backend.FrameEvent, backend.FrameInfo, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.FrameInfo{}, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.FrameInfo{}, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	src, ok := m.Backend.(backend.FrameSource)
+	if !ok {
+		return nil, backend.FrameInfo{}, backend.Errorf("unsupported", kind+" has no frame stream")
+	}
+	events, info, err := src.Frames(ctx, id, cols, rows)
+	if err != nil {
+		return nil, backend.FrameInfo{}, err
+	}
+
+	out := make(chan backend.FrameEvent, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Frame != nil {
+					f := *ev.Frame
+					f.SurfaceID = joinID(kind, f.SurfaceID)
+					ev = backend.FrameEvent{Frame: &f}
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, info, nil
 }
 
 // fanOut runs a command on every connected member and merges the results;

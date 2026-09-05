@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,14 @@ type Backend struct {
 	// agent-status subscription. Tests swap them for canned streams.
 	dial       func(ctx context.Context) (subscription, error)
 	dialStatus func(ctx context.Context, paneID string) (subscription, error)
+	// observeCmd builds the `herdr terminal session observe` subprocess for a
+	// frame stream. Tests swap it for a small script printing canned NDJSON.
+	observeCmd func(ctx context.Context, paneID string, cols, rows int) *exec.Cmd
+	// frameBackpressureTimeout and finalFrameEventTimeout override the
+	// defaults in frames.go when non-zero; tests shrink them rather than
+	// waiting out the real durations.
+	frameBackpressureTimeout time.Duration
+	finalFrameEventTimeout   time.Duration
 }
 
 // New builds a herdr backend. It does not connect; Run does.
@@ -69,6 +78,7 @@ func New(cfg Config) *Backend {
 	}
 	b.dial = b.dialSubscription
 	b.dialStatus = b.dialStatusSubscription
+	b.observeCmd = b.buildObserveCmd
 	return b
 }
 
@@ -79,6 +89,7 @@ func (b *Backend) Info() backend.Info {
 			Browser:       false,
 			AgentStatus:   true,
 			Notifications: "push",
+			Frames:        true,
 		},
 	}
 }

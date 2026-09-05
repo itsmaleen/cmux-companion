@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,14 @@ import (
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
 	"github.com/itsmaleen/cmux-companion/bridge/internal/imagepaste"
 )
+
+// framePushBuffer bounds how many surface.frame/surface.frames.ended pushes
+// may queue for the connection's write loop before a forwarder goroutine
+// blocks. Deliberately small: if the loop can't drain this promptly the
+// bottleneck is real network backpressure, and blocking here is what starves
+// the backend's own frame channel into its 2s backpressure timeout instead of
+// silently buffering an unbounded amount of stale video.
+const framePushBuffer = 16
 
 // maxIncomingMessageBytes bounds one client message. Sized from the largest
 // image a paste may carry: base64 inflates by 4/3, plus room for the JSON
@@ -72,6 +81,23 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	ctx := r.Context()
+	// connCtx is cancelled on every handleClient exit path (deferred below),
+	// independent of exactly how r.Context() itself unwinds. Every frame
+	// subscription is a child of it, so all of them tear down deterministically
+	// the moment this function returns — "every subscription of a connection
+	// is torn down when the connection closes."
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
+	// frameSubs maps a subscribed surface_id to the cancel func for its
+	// stream. Touched only from this goroutine (the command-dispatch loop
+	// below), so it needs no lock.
+	frameSubs := make(map[string]context.CancelFunc)
+	// framePushes carries surface.frame / surface.frames.ended pushes from the
+	// per-subscription forwarder goroutines (started below) into the single
+	// writer goroutine's select loop; websocket connections aren't safe for
+	// concurrent writes.
+	framePushes := make(chan pushMessage, framePushBuffer)
 
 	// Subscribe to backend events BEFORE reading the connection snapshot, so a
 	// transition between the two can't be missed: the snapshot says "up", the
@@ -130,6 +156,11 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 				return
 			}
 
+		case msg := <-framePushes:
+			if err := wsjson.Write(ctx, conn, msg); err != nil {
+				return
+			}
+
 		case cmd, ok := <-incoming:
 			if !ok {
 				return
@@ -140,9 +171,19 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 				resp = handlePasteImage(cmd, be, images)
 			case "surface.paste_file":
 				resp = handlePasteFile(cmd, be, images)
+			case "surface.frames.subscribe":
+				resp = handleFramesSubscribe(cmd, be, connCtx, frameSubs, framePushes)
+			case "surface.frames.unsubscribe":
+				resp = handleFramesUnsubscribe(cmd, frameSubs, framePushes)
 			default:
 				resp = dispatch(cmd, be)
 			}
+			// The subscribe response above must reach the wire before the
+			// first frame push: dispatching a subscribe starts the forwarder
+			// goroutine synchronously, but that goroutine can only ever land
+			// its first send on framePushes, which this same writer goroutine
+			// won't service until it loops back around to `select` — i.e.
+			// after the Write below returns.
 			if err := wsjson.Write(ctx, conn, resp); err != nil {
 				return
 			}
@@ -269,4 +310,121 @@ func typeSavedPath(cmd commandRequest, be backend.Backend, images *imagepaste.St
 		"format":     saved.Format,
 	})
 	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// handleFramesSubscribe starts (or restarts) a live terminal-frame stream for
+// a surface. The backend must implement backend.FrameSource — cmux doesn't,
+// so this answers `unsupported` for it, standalone or namespaced behind
+// multi. Resubscribing an already-subscribed surface silently tears down the
+// old stream and starts a fresh one (a new full frame): no
+// `surface.frames.ended` is pushed for it, since the caller asked for exactly
+// this and isn't losing anything it didn't intend to replace.
+func handleFramesSubscribe(cmd commandRequest, be backend.Backend, connCtx context.Context, subs map[string]context.CancelFunc, framePushes chan<- pushMessage) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	src, ok := be.(backend.FrameSource)
+	if !ok {
+		return errorResponse(cmd.ID, "unsupported", "this backend has no frame stream")
+	}
+
+	if cancel, exists := subs[surfaceID]; exists {
+		cancel()
+		delete(subs, surfaceID)
+	}
+
+	subCtx, cancel := context.WithCancel(connCtx)
+	events, info, err := src.Frames(subCtx, surfaceID, intParam(cmd.Params, "cols"), intParam(cmd.Params, "rows"))
+	if err != nil {
+		cancel()
+		return errorFor(cmd.ID, err)
+	}
+	subs[surfaceID] = cancel
+	go forwardFrames(subCtx, surfaceID, events, framePushes)
+
+	result, _ := json.Marshal(map[string]any{
+		"surface_id": surfaceID,
+		"width":      info.Width,
+		"height":     info.Height,
+	})
+	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// handleFramesUnsubscribe tears down a surface's frame stream, if one is
+// running, and tells the phone why it ended. Unsubscribing a surface with no
+// active stream is not an error — it's the steady state after a stream ends
+// on its own and the phone hasn't resubscribed yet.
+func handleFramesUnsubscribe(cmd commandRequest, subs map[string]context.CancelFunc, framePushes chan<- pushMessage) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	if cancel, ok := subs[surfaceID]; ok {
+		cancel()
+		delete(subs, surfaceID)
+		select {
+		case framePushes <- pushMessage{Type: "surface.frames.ended", Data: map[string]any{
+			"surface_id": surfaceID,
+			"reason":     "unsubscribed",
+		}}:
+		default:
+			// framePushes is already full of live frame traffic for other
+			// surfaces; dropping this notice is fine, the phone already knows
+			// it unsubscribed.
+		}
+	}
+	result, _ := json.Marshal(map[string]any{"ok": true})
+	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// forwardFrames relays one subscription's FrameEvents onto framePushes as
+// wire pushes until the stream ends or ctx is cancelled (unsubscribe,
+// resubscribe, or connection close).
+func forwardFrames(ctx context.Context, surfaceID string, events <-chan backend.FrameEvent, framePushes chan<- pushMessage) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			var msg pushMessage
+			if ev.Frame != nil {
+				f := ev.Frame
+				msg = pushMessage{Type: "surface.frame", Data: map[string]any{
+					"surface_id": surfaceID,
+					"seq":        f.Seq,
+					"full":       f.Full,
+					"width":      f.Width,
+					"height":     f.Height,
+					"encoding":   f.Encoding,
+					"bytes":      f.Bytes,
+				}}
+			} else {
+				msg = pushMessage{Type: "surface.frames.ended", Data: map[string]any{
+					"surface_id": surfaceID,
+					"reason":     ev.Ended,
+				}}
+			}
+			select {
+			case framePushes <- msg:
+			case <-ctx.Done():
+				return
+			}
+			if ev.Frame == nil {
+				return // the backend already ended the stream
+			}
+		}
+	}
+}
+
+// intParam reads an optional integer command param sent over JSON (so it
+// decodes as float64), defaulting to 0.
+func intParam(params map[string]any, key string) int {
+	if v, ok := params[key].(float64); ok {
+		return int(v)
+	}
+	return 0
 }

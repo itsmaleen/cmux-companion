@@ -151,6 +151,54 @@ reads, and refetches `surface.list` to pick up the title.
 }
 ```
 
+### surface.frame
+
+Sent only to the connection that subscribed (never broadcast) while a
+`surface.frames.subscribe` stream is open. One live terminal repaint. `seq 1`
+of a stream (and of every restart from a resubscribe) is always `full: true`;
+later ones are deltas in the source runtime's own encoding. `bytes` is
+base64, passed through untouched — decode it, apply it to a terminal emulator
+keyed on `encoding`, and render.
+
+```json
+{
+  "type": "surface.frame",
+  "data": {
+    "surface_id": "herdr:w1:p1",
+    "seq": 1,
+    "full": true,
+    "width": 120,
+    "height": 40,
+    "encoding": "ansi",
+    "bytes": "G1sySg=="
+  }
+}
+```
+
+### surface.frames.ended
+
+Sent only to the subscribing connection when a frame stream stops, for any
+reason. `reason` is one of: `closed` (the pane/terminal itself closed),
+`error` (the underlying observer died unexpectedly), `backpressure` (the
+phone fell too far behind — see below), or `unsubscribed` (the phone called
+`surface.frames.unsubscribe`, or the connection is dropping this surface
+because it subscribed to it again). Resubscribing after any of these starts a
+fresh stream with a new full frame.
+
+```json
+{
+  "type": "surface.frames.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "backpressure" }
+}
+```
+
+Backpressure is deliberate: if the phone can't keep up for a couple of
+seconds, the bridge ends the stream outright rather than dropping the one
+delta that didn't fit — a dropped delta would desync the phone's rendered
+grid from the pane's actual contents, silently and permanently. Ending the
+stream and letting the phone resubscribe (getting a fresh full frame) is the
+same "skip ahead, never corrupt" trade mosh makes for a laggy connection.
+
 ### connected
 
 Sent immediately after WebSocket handshake + auth succeeds.
@@ -167,7 +215,8 @@ Sent immediately after WebSocket handshake + auth succeeds.
     "capabilities": {
       "browser": false,
       "agent_status": true,
-      "notifications": "push"
+      "notifications": "push",
+      "frames": true
     }
   }
 }
@@ -177,7 +226,13 @@ Sent immediately after WebSocket handshake + auth succeeds.
 `capabilities.browser` — the runtime has browser surfaces (`surface.create
 {type:"browser"}`, `browser.url.get`); `agent_status` — surfaces carry a
 runtime-detected `agent_status` and `surface.updated` is pushed;
-`notifications` — `"polled"` (runtime keeps a list) or `"push"` (synthesised).
+`notifications` — `"polled"` (runtime keeps a list) or `"push"` (synthesised);
+`frames` — the runtime can stream a surface's live terminal frames
+(`surface.frames.subscribe`). herdr reports `frames: true`; cmux has no such
+stream and reports `frames: false` — its `surface.frames.subscribe` always
+answers `unsupported`. A composite bridge reports `frames: true` if any
+member has it; the phone should still expect `unsupported` for a surface whose
+own runtime doesn't.
 
 ## Client → Server: Commands
 
@@ -333,6 +388,28 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 **Panes:**
 - `pane.list` — `{"workspace_id":"..."}` (optional, defaults to current)
 - `pane.focus` — `{"pane_id":"..."}`
+
+**Frames (live terminal streaming, herdr only — see `capabilities.frames`):**
+- `surface.frames.subscribe` — `{"surface_id":"...","cols":120,"rows":40}`
+  → `{"surface_id":"...","width":120,"height":40}`.
+
+  Starts a live stream of the surface's terminal as `surface.frame` pushes
+  (sent only to this connection, never broadcast — see above), so the phone
+  can render it with a real terminal emulator instead of polling
+  `surface.read_text`. `cols`/`rows` are optional; omitted or `0` means the
+  surface's own native size, which the result reports back. Subscribing again
+  to a surface already subscribed on this connection restarts the stream (a
+  fresh full frame) rather than erroring. Every subscription a connection
+  holds is torn down when the connection closes.
+
+  Errors: `unsupported` (the surface's runtime has no frame stream — always
+  true for cmux), `not_found` (no such surface), `frames_error` (the stream
+  could not be started).
+
+- `surface.frames.unsubscribe` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the stream if one is running; a push
+  (`surface.frames.ended {reason:"unsubscribed"}`) follows. Not an error if
+  nothing was subscribed.
 
 **Input:**
 - `surface.send_text` — `{"surface_id":"...","text":"ls\n"}`
