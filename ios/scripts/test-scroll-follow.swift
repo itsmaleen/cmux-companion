@@ -67,6 +67,26 @@ check(following, "still following after the correction")
 following = ScrollFollow.follow(current: following, atBottom: false, isProgrammatic: false)
 check(!following, "the user's own scroll still stops the follow")
 
+print("ScrollFollow.anchor")
+check(ScrollFollow.anchor(autoScroll: true, oldText: "a\nb\nc", newText: "a\nb\nc\nd") == .followBottom,
+      "following live output always follows the bottom")
+check(ScrollFollow.anchor(autoScroll: true, oldText: "", newText: "a") == .followBottom,
+      "following live output follows the bottom even from empty")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "", newText: "a\nb\nc") == .followBottom,
+      "the very first text (nothing to anchor to) follows the bottom")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "a\nb\nc", newText: "a\nb\nc") == .keepOffset,
+      "identical text keeps the raw offset")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "a\nb\nc", newText: "a\nb\nc\nd\ne") == .keepOffset,
+      "new lines appended at the bottom keep the raw offset — nothing above the viewport moved")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "b\nc\nd", newText: "a\nb\nc\nd") == .shiftByAddedHeight,
+      "history prepended above shifts the offset by the added height")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "a\nb\nc", newText: "x\ny\nz") == .keepDistanceFromBottom,
+      "an unrelated replacement (full-screen repaint) keeps the distance from the bottom")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "line1\nline2\nline3", newText: "line1\nlineX\nline3") == .keepDistanceFromBottom,
+      "a changed middle line (neither prefix nor suffix) keeps the distance from the bottom")
+check(ScrollFollow.anchor(autoScroll: false, oldText: "foo   \nbar", newText: "foo\nbar") == .keepDistanceFromBottom,
+      "a rewritten line (e.g. trailing whitespace trimmed) is neither prefix nor suffix, so it keeps distance from bottom")
+
 if failures > 0 {
     print("\n\(failures) failure(s)")
     exit(1)

@@ -170,15 +170,15 @@ struct TerminalTextView: UIViewRepresentable {
                 return
             }
 
-            // A history load prepends content above the viewport while the user
-            // is reading scrollback. Detect it (old text is a strict suffix of
-            // the new) so we can keep the same lines on screen instead of
-            // letting them jump.
+            // Decide how to re-anchor the viewport BEFORE the swap — it needs
+            // the old text, old content size, and old offset, all of which
+            // are about to be overwritten. See ScrollFollow.anchor.
             let oldText = applied?.text ?? ""
-            let isPrepend = !autoScroll && !oldText.isEmpty
-                && snapshot.text.count > oldText.count && snapshot.text.hasSuffix(oldText)
+            let viewportHeight = tv.bounds.height
             let oldHeight = tv.contentSize.height
             let oldOffset = tv.contentOffset
+            let distanceFromBottom = max(0, oldHeight - (oldOffset.y + viewportHeight))
+            let anchor = ScrollFollow.anchor(autoScroll: autoScroll, oldText: oldText, newText: snapshot.text)
 
             tv.attributedText = attr
             applied = snapshot
@@ -202,9 +202,25 @@ struct TerminalTextView: UIViewRepresentable {
                 return
             }
 
-            if autoScroll {
+            switch anchor {
+            case .followBottom:
                 scrollToBottom(tv)
-            } else if isPrepend {
+
+            case .keepOffset:
+                // Layout synchronously, then re-set the same raw offset,
+                // clamped to the (possibly shorter) new content — an append
+                // below the viewport, or an unchanged text, moves nothing
+                // above it.
+                programmatically {
+                    tv.layoutIfNeeded()
+                    let maxOffsetY = max(0, tv.contentSize.height - viewportHeight)
+                    let clampedY = min(oldOffset.y, maxOffsetY)
+                    if abs(tv.contentOffset.y - clampedY) > 0.5 {
+                        tv.setContentOffset(CGPoint(x: oldOffset.x, y: clampedY), animated: false)
+                    }
+                }
+
+            case .shiftByAddedHeight:
                 // Layout synchronously so contentSize reflects the prepended
                 // text, then shift the offset by exactly the added height — the
                 // viewport stays anchored on the text the user was reading.
@@ -214,6 +230,19 @@ struct TerminalTextView: UIViewRepresentable {
                     if delta > 0 {
                         tv.setContentOffset(CGPoint(x: oldOffset.x, y: oldOffset.y + delta), animated: false)
                     }
+                }
+
+            case .keepDistanceFromBottom:
+                // A replace (full-screen repaint, or the card composition
+                // itself changing) — neither the old offset nor an
+                // added-height delta means anything against the new content,
+                // but preserving how far the reader had scrolled up from the
+                // end does.
+                programmatically {
+                    tv.layoutIfNeeded()
+                    let newHeight = tv.contentSize.height
+                    let target = max(0, newHeight - viewportHeight - distanceFromBottom)
+                    tv.setContentOffset(CGPoint(x: oldOffset.x, y: target), animated: false)
                 }
             }
         }

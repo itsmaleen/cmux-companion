@@ -187,6 +187,12 @@ struct PaneCardView: View {
                         .environment(\.colorScheme, .dark)
                 )
                 .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+                // The visual stays a small 32pt puck (it shouldn't cover more
+                // of the card than it needs to), but the tappable area is
+                // widened to Apple's 44x44 minimum so it's reliably hittable
+                // on a phone where this sits at a card's corner.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Jump to newest output")
     }
