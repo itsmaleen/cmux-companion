@@ -204,6 +204,11 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 
 **Surfaces:**
 - `surface.list` — `{"workspace_id":"..."}` (optional, defaults to current)
+  On the cmux backend the bridge adds `resume_binding: {"kind":"opencode",
+  "source":"bridge-tty"}` to a surface cmux reports unbound but whose tty has
+  a real opencode process on it (cmux binds only Claude Code by itself), so
+  the phone treats it as an agent surface; it carries no `checkpoint_id` —
+  `agent.transcript` resolves the session by title + cwd.
 - `surface.focus` — `{"surface_id":"..."}`
 - `surface.create` — `{"type":"terminal"}` (or "browser", creates in focused pane)
 - `surface.split` — `{"direction":"right","surface_id":"..."}` (direction: left/right/up/down)

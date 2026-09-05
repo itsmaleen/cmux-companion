@@ -175,6 +175,12 @@ func (b *Backend) Handle(method string, params map[string]any) (json.RawMessage,
 	switch method {
 	case "claude.transcript", "agent.transcript":
 		return b.transcript(params)
+	case "surface.list":
+		result, err := b.client.Send(method, params)
+		if err != nil {
+			return nil, backend.Errorf("proxy_error", err.Error())
+		}
+		return annotateSurfaces(result, b.terminal, b.dispatcher.RunsOpencode), nil
 	}
 
 	result, err := b.client.Send(method, params)
@@ -227,10 +233,11 @@ func (b *Backend) transcript(params map[string]any) (json.RawMessage, error) {
 		KnownFingerprint: transcripts.KnownFingerprint(params),
 	}
 
-	// No cmux-recognized binding (Claude, or an installed opencode hook): the
-	// only agent left findable is opencode, identified by its tty and title
-	// rather than anything cmux itself reports.
-	if kind, _ := resumeBinding["kind"].(string); kind == "" {
+	// No session id from cmux — either no binding at all (Claude, or an
+	// installed opencode hook, would have given one) or the bridge's own
+	// tty-derived {kind: "opencode"} label from annotateSurfaces. Either way
+	// the surface's tty, title and cwd are what identify the conversation.
+	if checkpointID, _ := resumeBinding["checkpoint_id"].(string); checkpointID == "" {
 		if terminal == nil {
 			terminal = b.terminal(surfaceID)
 		}
@@ -249,6 +256,50 @@ func (b *Backend) transcript(params map[string]any) (json.RawMessage, error) {
 		return nil, backend.Errorf("transcript_error", err.Error())
 	}
 	return transcripts.Encode(res), nil
+}
+
+// annotateSurfaces labels each surface that cmux reports with no
+// resume_binding, but whose tty has a real opencode process on it, with
+// {kind: "opencode"} so the phone treats it like any other agent surface
+// (conversation on the card, history reader). cmux binds only Claude Code by
+// itself — opencode only with its opt-in hooks — so without this a plain
+// opencode surface looks like a shell to the phone even though the transcript
+// path can already read it. WHICH session is left to the transcript path
+// (title + cwd); the label carries no checkpoint_id. Never fatal: any parse
+// failure returns the reply untouched.
+func annotateSurfaces(raw json.RawMessage, terminal func(string) map[string]any, runsOpencode func(string) bool) json.RawMessage {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
+	}
+	surfaces, _ := payload["surfaces"].([]any)
+	changed := false
+	for _, item := range surfaces {
+		surface, _ := item.(map[string]any)
+		if surface == nil {
+			continue
+		}
+		if binding, _ := surface["resume_binding"].(map[string]any); binding != nil {
+			if kind, _ := binding["kind"].(string); kind != "" {
+				continue
+			}
+		}
+		id, _ := surface["id"].(string)
+		t := terminal(id)
+		if t == nil || !runsOpencode(stringField(t, "tty")) {
+			continue
+		}
+		surface["resume_binding"] = map[string]any{"kind": "opencode", "source": "bridge-tty"}
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // surfaceBinding fetches one surface's resume_binding from a surface.list

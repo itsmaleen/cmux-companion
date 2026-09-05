@@ -126,13 +126,21 @@ func (d *Dispatcher) Render(req Request) (Result, error) {
 	// opencode, and only when the caller can prove a real opencode process is
 	// on the surface's terminal — never inferred from the title alone, which
 	// a shell can be made to say anything with.
-	if req.TTY == "" || !d.opencode.Available() {
-		return Result{}, nil
-	}
-	if _, running := d.opencode.TTYs()[opencode.NormalizeTTY(req.TTY)]; !running {
+	if !d.RunsOpencode(req.TTY) {
 		return Result{}, nil
 	}
 	return d.renderOpencodeByTitle(req)
+}
+
+// RunsOpencode reports whether a real opencode process has tty as its
+// controlling terminal. This is the fact a backend needs before it may label a
+// surface its runtime does not bind as opencode; the title alone never is.
+func (d *Dispatcher) RunsOpencode(tty string) bool {
+	if tty == "" || !d.opencode.Available() {
+		return false
+	}
+	_, running := d.opencode.TTYs()[opencode.NormalizeTTY(tty)]
+	return running
 }
 
 // renderOpencodeByTitle resolves WHICH opencode session a surface with no
