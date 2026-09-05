@@ -868,9 +868,27 @@ final class AppState: ObservableObject {
                 return
             }
             if self.frameFeeds[surfaceID] == nil {
-                self.frameFeeds[surfaceID] = FrameFeed()
+                self.frameFeeds[surfaceID] = self.makeFrameFeed(for: surfaceID)
             }
         }
+    }
+
+    /// A feed whose resync request restarts the surface's stream.
+    private func makeFrameFeed(for surfaceID: String) -> FrameFeed {
+        let feed = FrameFeed()
+        feed.onResyncNeeded = { [weak self] in self?.resyncFrames(surfaceID) }
+        return feed
+    }
+
+    /// Restarts a live stream so the bridge sends a fresh full frame — the
+    /// phone's view can no longer reconstruct the screen from what it kept
+    /// (see FrameFeed.onResyncNeeded). A resubscribe of an already-subscribed
+    /// surface restarts the stream on the bridge; the feed itself is kept so
+    /// the card doesn't flicker back to text.
+    private func resyncFrames(_ surfaceID: String) {
+        guard surfaceID == frameFocusedSurfaceID, framesSubscribed.contains(surfaceID) else { return }
+        framesSubscribed.remove(surfaceID)
+        subscribeFrames(for: surfaceID)
     }
 
     /// Stops streaming frames for `surfaceID` and drops its feed immediately
@@ -898,7 +916,7 @@ final class AppState: ObservableObject {
             await MainActor.run {
                 guard let self, push.surfaceID == self.frameFocusedSurfaceID else { return }
                 let feed = self.frameFeeds[push.surfaceID] ?? {
-                    let feed = FrameFeed()
+                    let feed = self.makeFrameFeed(for: push.surfaceID)
                     self.frameFeeds[push.surfaceID] = feed
                     return feed
                 }()
@@ -1584,22 +1602,38 @@ final class FrameFeed {
         didSet { replayBuffered() }
     }
 
+    /// Called when the feed (or its view) can no longer reconstruct the
+    /// screen from what it holds and needs the bridge to restart the stream
+    /// with a fresh full frame. Wired by AppState to a resubscribe.
+    var onResyncNeeded: (() -> Void)?
+
     private var buffered: [TerminalFrame] = []
-    /// Bounds memory if a sink never attaches (shouldn't happen in practice —
-    /// a subscribe only starts once the card is about to show the feed) and
-    /// keeps a runaway delta-only stream from growing unbounded.
-    private static let maxBuffered = 64
+    private var bufferedDeltaBytes = 0
+    /// Bounds the deltas kept since the last full frame. Dropping a delta
+    /// would make a later replay silently wrong, so instead the whole tail is
+    /// dropped and a resync requested.
+    private static let maxBufferedDeltaBytes = 4 << 20
 
     func append(_ frame: TerminalFrame) {
         if frame.full {
             buffered = [frame]
+            bufferedDeltaBytes = 0
         } else {
             buffered.append(frame)
-            if buffered.count > Self.maxBuffered {
-                buffered.removeFirst(buffered.count - Self.maxBuffered)
+            bufferedDeltaBytes += frame.bytes.count
+            if bufferedDeltaBytes > Self.maxBufferedDeltaBytes {
+                buffered = []
+                bufferedDeltaBytes = 0
+                sink?.receive(frame)
+                onResyncNeeded?()
+                return
             }
         }
         sink?.receive(frame)
+    }
+
+    func requestResync() {
+        onResyncNeeded?()
     }
 
     private func replayBuffered() {

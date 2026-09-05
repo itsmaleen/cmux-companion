@@ -23,6 +23,7 @@ struct LivePaneView: UIViewRepresentable {
         )
         context.coordinator.view = view
         context.coordinator.lastScrollToBottomRequest = scrollToBottomRequest
+        view.onResyncNeeded = { [weak feed] in feed?.requestResync() }
         feed.sink = context.coordinator
         return view
     }
@@ -33,6 +34,7 @@ struct LivePaneView: UIViewRepresentable {
         // and SwiftUI reused this UIViewRepresentable instance rather than
         // recreating it) — re-point the sink so frames land on this view.
         if feed.sink !== context.coordinator {
+            uiView.onResyncNeeded = { [weak feed] in feed?.requestResync() }
             feed.sink = context.coordinator
         }
         if scrollToBottomRequest != context.coordinator.lastScrollToBottomRequest {
@@ -49,7 +51,7 @@ struct LivePaneView: UIViewRepresentable {
         Coordinator()
     }
 
-    /// Applies frames to the SwiftTerm view. A separate object (rather than
+    /// Hands frames to the SwiftTerm view. A separate object (rather than
     /// LivePaneView itself) because FrameSink must be a class — FrameFeed
     /// holds it `weak`.
     @MainActor
@@ -58,28 +60,43 @@ struct LivePaneView: UIViewRepresentable {
         var lastScrollToBottomRequest = 0
 
         func receive(_ frame: TerminalFrame) {
-            guard let view else { return }
-            if frame.full {
-                view.getTerminal().resetToInitialState()
-                view.applyFrameGeometry(columns: frame.width, rows: frame.height)
-            }
-            view.feed(byteArray: Array(frame.bytes)[...])
+            view?.apply(frame)
         }
     }
 }
 
-/// A SwiftTerm `TerminalView` that never accepts input focus and keeps its
-/// column count pinned to the last live frame's declared width — SwiftTerm's
-/// own `layoutSubviews` otherwise silently re-fits the terminal's column
-/// count to whatever the view's current bounds allow, which would rewrap a
-/// frame's exact layout every time the card's size changes.
+/// A SwiftTerm `TerminalView` that never accepts input focus and always shows
+/// the last full frame (plus the deltas since it) at that frame's declared
+/// columns × rows.
+///
+/// SwiftTerm's own `layoutSubviews` re-fits the terminal's column count to
+/// whatever the current bounds allow — and a resize of a terminal that
+/// already holds content crops that content, permanently. That happens on
+/// the first layout after the view is created, on rotation, and whenever the
+/// card's size changes, so it is not enough to pin the size once: after
+/// every such pass the view resets the emulator, re-asserts the frame's real
+/// grid, and replays the frame bytes it kept. Frames are cursor-addressed
+/// repaints, so the replay is exact.
 final class DisplayOnlyTerminalView: TerminalView {
-    /// The most recent full frame's declared size, in terminal cells. Font
-    /// size is refit to this on every layout pass so a card resize (rotation,
-    /// split-view) doesn't leave the column count out of sync with what the
-    /// bridge is actually sending.
+    /// Bounds how many delta bytes are kept for replay before the view gives
+    /// up and asks for a fresh full frame instead.
+    private static let maxDeltaBytes = 4 << 20
+
     private var lastColumns = 0
     private var lastRows = 0
+    private var fullFrame: [UInt8]?
+    private var deltas: [[UInt8]] = []
+    private var deltaBytes = 0
+    /// Whether the emulator currently reflects `fullFrame` + `deltas` at
+    /// `lastColumns` × `lastRows`. False until the first replay succeeds
+    /// (the view needs non-zero bounds to fit a font first).
+    private var applied = false
+    /// Set when deltas had to be dropped: the live screen is still right (each
+    /// delta was fed as it arrived) but a replay would not be, so the next one
+    /// asks for a resync.
+    private var replayIncomplete = false
+    /// Asks the feed for a fresh full frame (a resubscribe on the bridge).
+    var onResyncNeeded: (() -> Void)?
 
     override var canBecomeFirstResponder: Bool { false }
     override var canBecomeFocused: Bool { false }
@@ -99,31 +116,76 @@ final class DisplayOnlyTerminalView: TerminalView {
         isOpaque = true
     }
 
-    /// Sets the terminal to `columns` × `rows` and fits the font so `columns`
-    /// spans the view's current width (or clamps to the minimum, letting the
-    /// view scroll horizontally instead of shrinking further).
-    func applyFrameGeometry(columns: Int, rows: Int) {
-        lastColumns = columns
-        lastRows = rows
-        refit()
+    /// Applies one frame: a full frame replaces everything kept and is
+    /// replayed from scratch; a delta is fed live and kept for later replays.
+    func apply(_ frame: TerminalFrame) {
+        let bytes = [UInt8](frame.bytes)
+        if frame.full {
+            fullFrame = bytes
+            deltas = []
+            deltaBytes = 0
+            replayIncomplete = false
+            lastColumns = frame.width
+            lastRows = frame.height
+            replay()
+            return
+        }
+        // A delta before any full frame has nothing to apply to; the bridge
+        // always starts a stream with a full frame, so just wait for it.
+        guard fullFrame != nil else { return }
+        if applied {
+            feed(byteArray: bytes[...])
+        }
+        deltas.append(bytes)
+        deltaBytes += bytes.count
+        if deltaBytes > Self.maxDeltaBytes {
+            deltas = []
+            deltaBytes = 0
+            replayIncomplete = true
+            onResyncNeeded?()
+        }
     }
 
     override func layoutSubviews() {
-        // Runs SwiftTerm's own auto-fit-to-bounds resize first; `refit()`
-        // below then re-asserts the last frame's real dimensions, so that
-        // auto-fit is never actually visible on screen.
+        // Runs SwiftTerm's own fit-to-bounds resize first (which may crop the
+        // emulator's content); the replay below then restores the frame's
+        // real grid and content.
         super.layoutSubviews()
-        refit()
+        guard lastColumns > 0, lastRows > 0 else { return }
+        let terminal = getTerminal()
+        if !applied || terminal.cols != lastColumns || terminal.rows != lastRows {
+            replay()
+        }
     }
 
-    private func refit() {
-        guard lastColumns > 0, lastRows > 0, bounds.width > 0 else { return }
+    /// Resets the emulator to the frame's grid and replays the kept bytes.
+    private func replay() {
+        guard lastColumns > 0, lastRows > 0, bounds.width > 0, bounds.height > 0, let full = fullFrame else {
+            applied = false
+            return
+        }
+        refitFont()
+        getTerminal().resetToInitialState()
+        resize(cols: lastColumns, rows: lastRows)
+        feed(byteArray: full[...])
+        for delta in deltas {
+            feed(byteArray: delta[...])
+        }
+        applied = true
+        if replayIncomplete {
+            onResyncNeeded?()
+        }
+    }
+
+    /// Fits the font so `lastColumns` spans the view's width, clamped to
+    /// FrameFit's range (at the minimum the view scrolls horizontally instead
+    /// of shrinking further).
+    private func refitFont() {
         let probeFont = UIFont.monospacedSystemFont(ofSize: 1, weight: .regular)
         let advance = ("M" as NSString).size(withAttributes: [.font: probeFont]).width
         let size = FrameFit.fontSize(forColumns: lastColumns, viewWidth: bounds.width, advanceOfMAt1pt: advance)
         if abs(size - font.pointSize) > 0.05 {
             font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         }
-        resize(cols: lastColumns, rows: lastRows)
     }
 }
