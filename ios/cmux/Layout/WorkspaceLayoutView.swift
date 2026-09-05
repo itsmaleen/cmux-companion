@@ -360,8 +360,10 @@ struct WorkspaceLayoutView: View {
             }
         }
         .onAppear {
-            appState.refreshSurfaces()
-            speechManager.requestPermissions()
+            if !appState.isFixtureMode {
+                appState.refreshSurfaces()
+                speechManager.requestPermissions()
+            }
             wireVolumeCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 if volumeButtonControls { volumeHandler.start() }
@@ -704,6 +706,7 @@ struct WorkspaceLayoutView: View {
             transcript: speechManager.transcript,
             terminalText: surface.isBrowser ? "" : appState.cardText(for: surface),
             contentScale: contentScale,
+            frameFeed: surface.isBrowser ? nil : appState.frameFeeds[surface.id],
             isBrowser: surface.isBrowser,
             browserURL: appState.browserURLs[surface.id] ?? "",
             canOpenHistory: surface.hasTranscript,

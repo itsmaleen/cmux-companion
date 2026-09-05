@@ -8,6 +8,13 @@ struct PaneCardView: View {
     let transcript: String
     var terminalText: String = ""
     var contentScale: CGFloat = 1.0
+    /// The focused surface's live terminal frame stream, when the bridge
+    /// supports it and a subscribe has succeeded. Non-nil switches the card
+    /// from the polled-text `TerminalTextView` to `LivePaneView`, a real ANSI
+    /// emulator fed frames directly (bypassing SwiftUI's render cycle — see
+    /// `AppState.FrameFeed`). nil (no support, subscribe still pending, or a
+    /// non-focused card) renders exactly as before.
+    var frameFeed: FrameFeed?
     var isBrowser: Bool = false
     var browserURL: String = ""
     /// When true, scrolling to the top of a focused card opens the conversation
@@ -86,6 +93,8 @@ struct PaneCardView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let frameFeed {
+                        liveContentView(frameFeed)
                     } else if !terminalText.isEmpty {
                         terminalContentView
                     } else {
@@ -128,6 +137,53 @@ struct PaneCardView: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(isTranscribing ? Color.red.opacity(0.03) : .clear)
         )
+    }
+
+    // MARK: - Live terminal content
+
+    /// The live-emulator mode: LivePaneView fills the card. Nested scrolling
+    /// SwiftTerm's own scrollback UIScrollView inside the outer card layout's
+    /// ScrollView proved unworkable within reasonable effort (SwiftTerm's
+    /// `TerminalView` IS a `UIScrollView`, and two nested vertically-scrolling
+    /// views fight for the same pan gesture) — so unlike the design's
+    /// preferred inline history, a claude card's conversation stays reachable
+    /// only through the existing full-screen history sheet, via a small
+    /// button here rather than the polled-text card's "pull up" gesture
+    /// (which needs a scroll-position callback SwiftTerm doesn't expose).
+    private func liveContentView(_ feed: FrameFeed) -> some View {
+        LivePaneView(feed: feed, scrollToBottomRequest: scrollToBottomRequest)
+            .overlay(alignment: .topTrailing) {
+                if isFocused && canOpenHistory {
+                    historyButton
+                        .padding(.trailing, 10)
+                        .padding(.top, 8)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if isFocused {
+                    jumpToBottomButton
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 10)
+                }
+            }
+    }
+
+    private var historyButton: some View {
+        Button {
+            onOpenHistory?()
+        } label: {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .environment(\.colorScheme, .dark)
+                )
+                .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+        }
+        .accessibilityLabel("View conversation history")
     }
 
     // MARK: - Terminal content

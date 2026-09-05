@@ -24,6 +24,23 @@ struct cmuxApp: App {
                 .onOpenURL { url in
                     appState.handlePairingURL(url)
                 }
+                .onAppear { Self.applyLaunchOrientationIfRequested() }
+        }
+    }
+
+    /// `ios/scripts/screenshots.sh` launches the fixture with an extra
+    /// `-UITestOrientation landscape` argument to capture a landscape shot
+    /// alongside the portrait one. Argument-gated, like fixture mode itself —
+    /// normal launches never call this.
+    private static func applyLaunchOrientationIfRequested() {
+        guard ProcessInfo.processInfo.arguments.contains("-UITestOrientation"),
+              let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-UITestOrientation"),
+              index + 1 < ProcessInfo.processInfo.arguments.count,
+              ProcessInfo.processInfo.arguments[index + 1] == "landscape",
+              let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { error in
+            print("[Screenshot] landscape geometry request: \(error)")
         }
     }
 }
