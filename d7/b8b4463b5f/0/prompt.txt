@@ -1,0 +1,122 @@
+add fit to phone action
+
+---
+
+<task-notification>
+<task-id>a76113107607d25a0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a76113107607d25a0.output</output-file>
+<status>completed</status>
+<summary>Agent "Bridge surface.fit via herdr control" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**Deviation from the setup instructions first:** this worktree's branch had not actually been built off `feat/responsive-sessions` — it was still on the pre-frames commit `ccbe1b8` (a `rename/merry`-era point), so none of the `FrameSource`/`frames.go`/`frames_test.go` infrastructure the task depends on existed yet. I confirmed the worktree's branch was exactly at the merge-base with `feat/responsive-sessions` (zero unique commits), then fast-forwarded (`git merge --ff-only feat/responsive-sessions`) to bring in that infrastructure before starting. No work was lost.
+
+**Branch/commit:** `worktree-agent-a76113107607d25a0`, commit `c8b5cbc`.
+
+**Files (all under `bridge/` and `shared/protocol.md`):**
+- `bridge/internal/backend/backend.go` — added `Fitter`/`FitHandle` interfaces (~lines 114-152, right after `FrameSource`).
+- `bridge/internal/backend/herdr/fit.go` (new) — `Backend.Fit` (spawns `herdr terminal session control`, waits ≤2s for establishment via `pumpControl`), `fitHandle` (`Resize`/`Done`/`Reason`/`Release`), `buildControlCmd`.
+- `bridge/internal/backend/herdr/backend.go` — added `controlCmd`/`fitEstablishTimeout` fields, wired default in `New`.
+- `bridge/internal/backend/multi/multi.go` — `Backend.Fit` routes by namespace prefix, `unsupported` for non-`Fitter` members (cmux needs no change — it just doesn't implement the interface).
+- `bridge/internal/ws/handler.go` — `fits map[string]backend.FitHandle`, `handleFit`/`handleFitRelease`/`forwardFitEnded`, `surface.fit`/`surface.fit.release` dispatch cases, release-all-on-connection-exit defer, reused `framePushes`.
+- `shared/protocol.md` — documented `surface.fit`, `surface.fit.release`, `surface.fit.ended`.
+- Tests: `bridge/internal/backend/herdr/fit_test.go`, `bridge/internal/backend/multi/fit_test.go`, `bridge/internal/ws/fit_test.go` (all new).
+
+**Key design point:** `Done()` closes both when a fit ends on its own *and* after an explicit `Release()` (once the subprocess is reaped) — but `Reason()` stays `""` only in the Release case, which is what the ws handler's forwarder checks to suppress `surface.fit.ended` for "our own release" per the wire contract.
+
+**Verification:**
+- `gofmt -l` clean on all touched/new files.
+- `go build ./... &amp;&amp; go vet ./...` clean.
+- `go test -race -count=1 ./...` — all packages pass.
+- Live test (`-tags live`, deleted before commit) against real herdr 0.8.2, pane `wB:p3` (idle, unfocused):
+  ```
+  viewport_rows before fit: 40
+  viewport_rows during fit (60x20): 20
+  viewport_rows after resize (50x15): 15
+  viewport_rows after release: 40
+  ```
+  No `--takeover` used; no other pane touched; installed cmux-bridge daemon untouched.
+
+No other deviations from the design brief — the establishment heuristic ("still running with no closed record after the timeout ⇒ established") matched the facts as given, confirmed live (no frame was emitted for the idle pane, and it was still treated as established).</result>
+<usage><subagent_tokens>192225</subagent_tokens><tool_uses>70</tool_uses><duration_ms>800099</duration_ms></usage>
+<worktree><worktreePath>/Users/marlin/cmux-companion/.claude/worktrees/agent-a76113107607d25a0</worktreePath><worktreeBranch>worktree-agent-a76113107607d25a0</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+live screen still isnt consistently showing. sometimes when moving between surfaces, it doesnt load but seems to show up once keyboard is up
+
+---
+
+also now looks like surface isnt updating consistently. new content doesnt show until some action is taken
+
+---
+
+what needs rebuild, bridge or app
+
+---
+
+alright done
+
+---
+
+doesnt seem to have worked for live screen. also the “history” and live screen update and different paces it seems. 
+find an efficient way to do this that will work consistently
+
+---
+
+seemed to work when keyboard wasnt launched
+
+---
+
+actually nvm there was a brief time it worked but unsure why - not consistent
+
+---
+
+<task-notification>
+<task-id>a2d4a8c35b8a1c422</task-id>
+<tool-use-id>toolu_01F7sSTG3LGerePYZaqpo7FD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a2d4a8c35b8a1c422.output</output-file>
+<status>completed</status>
+<summary>Agent "Bridge-side screen rendering" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Report
+
+**Branch/commit:** `worktree-agent-a2d4a8c35b8a1c422` (this worktree's branch), commit `3b8304f` — "feat(bridge): server-side screen rendering — surface.screen stream". First fast-forwarded the worktree from `ccbe1b8` to `9263c97` via `git merge --ff-only feat/responsive-sessions`, then built on top.
+
+**go.mod:** added as a direct dependency (after `go mod tidy` corrected the initial indirect marking):
+```
+github.com/charmbracelet/x/vt v0.0.0-20260906004030-3986e9119cf9
+```
+(plus its transitive `ultraviolet`, `x/ansi`, etc., all pinned by `go get`/`go mod tidy`.)
+
+**Key files:**
+- `bridge/internal/backend/backend.go` — `Capabilities.Screen`, `ScreenCursor`/`ScreenRun`/`ScreenLine`/`ScreenUpdate`/`ScreenEvent` structs, `ScreenSource` interface (lines ~30-40, ~124-183).
+- `bridge/internal/screen/render.go` — `Renderer` (`New`, `Feed`, `Update`, `Cursor`), row rendering, color resolution, attribute mapping, trailing-whitespace trim, FNV row hashing for diffing against the last update *sent*.
+- `bridge/internal/screen/stream.go` — `Stream` (coalesces at 150ms, 2s/5s backpressure timeouts) and `FromFrames` (adapts any `backend.FrameSource`, stamps `SurfaceID`).
+- `bridge/internal/backend/herdr/frames.go:126-130` — `Backend.Screens` delegates to `screen.FromFrames`; `backend.go:101` sets `Screen: true`.
+- `bridge/internal/backend/multi/multi.go:224-267` — `Backend.Screens` routes by namespace prefix and re-namespaces `ScreenUpdate.SurfaceID`; capability union at line ~61.
+- `bridge/internal/ws/handler.go` — `screenSubs` map, `surface.screen.subscribe`/`unsubscribe` command cases, `handleScreenSubscribe`/`handleScreenUnsubscribe`/`forwardScreens` (mirrors the frames lifecycle exactly, including resubscribe-restarts and connection-close teardown via `connCtx`).
+- `shared/protocol.md` — new `surface.screen`/`surface.screen.ended` push docs, `capabilities.screen`, and the `surface.screen.subscribe`/`unsubscribe` commands section.
+- `ios/cmux/Fixtures/screen-shell.json` (5693 bytes, `herdr:w2:p7`, 85x19, 19 lines) and `screen-claude.json` (8604 bytes, `herdr:w1:p1`, 120x40, 40 lines) — generated once via `WRITE_SCREEN_FIXTURES=1 go test ./internal/screen/... -run TestWriteScreenFixtures` and committed.
+
+**Verification:**
+- `gofmt -l ./internal/...` clean for every touched file (two pre-existing unformatted files elsewhere — `multi_test.go`, `mdns/advertise.go` — are untouched by this change).
+- `go build ./...`, `go vet ./...` clean.
+- `go test -race -count=1 ./...` — all packages pass, including new tests: renderer (both real fixtures — green `#008000` "11 pass" run, bold "Kept" run, 40-row full update; synthetic delta yielding exactly one changed line + correct cursor position; truecolor `#0a141e` passthrough; trailing-whitespace trim; wide-char padding-cell skip), stream coalescing (three quick deltas → one update with all three rows, confirmed no leaked per-delta updates), herdr `Screens` end-to-end, multi routing/namespacing/capability union, ws round trip (subscribe → full → delta → unsubscribe-ended → connection-close teardown).
+- **Live test** (`-tags live`, deleted before committing): ran read-only against the real installed herdr daemon on pane `w1:p4` for 3s — `native size: 85x40`; first update `full=true cols=85 rows=40 len(lines)=40`; sample non-empty line: `[{T:"  "} {T:"Ran " FG:#999999} {T:"3" FG:#999999 A:1} {T:" shell commands" FG:#999999}]`; observed 3 delta updates over the window. No input sent; the installed cmux-bridge daemon was untouched.
+
+**Deviations from the design doc:**
+1. `vt.Emulator` has no cursor-visibility accessor (only `CursorPosition()`). Tracked visibility via `Emulator.SetCallbacks(vt.Callbacks{CursorVisibility: ...})` instead, defaulting to visible and updating on DECTCEM changes.
+2. Color resolution: `uv.Style.Fg`/`Bg` hold concrete `color.Color` types (`ansi.BasicColor`, `ansi.IndexedColor`, or a plain `color.RGBA` for truecolor). Resolved by switching on the basic/indexed cases through `Emulator.IndexedColor(i)` (which reflects any OSC-4 palette override, falling back to the library's default 256-color table) and calling `.RGBA()` directly otherwise.
+3. Attribute bit positions: `uv.Attrs` (bold=1, faint=2, italic=4, blink=8, reverse=32, strikethrough=128, underline as a separate `Underline` field) don't match the wire's bit layout, so `wireAttrs` remaps explicitly field-by-field rather than reusing the library's bitset.
+4. `Renderer.Update`'s wire `full` flag is computed as `full || !r.haveSent` internally (not just the caller's `full` argument), so a mid-stream resize/reset — which invalidates the per-row hash cache — automatically forces a correct full update on the next call even if the caller only asked for a diff.</result>
+<usage><subagent_tokens>238552</subagent_tokens><tool_uses>142</tool_uses><duration_ms>1119362</duration_ms></usage>
+<worktree><worktreePath>/Users/marlin/cmux-companion/.claude/worktrees/agent-a2d4a8c35b8a1c422</worktreePath><worktreeBranch>worktree-agent-a2d4a8c35b8a1c422</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+alright lets open a PR with these changes
