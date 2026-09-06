@@ -950,9 +950,18 @@ final class AppState: ObservableObject {
     /// means the bridge dropped us for being slow, and a fresh subscribe
     /// yields a new full frame to recover from.
     private func handleFramesEnded(_ push: SurfaceFramesEndedPush) {
+        // An `unsubscribed` end is the echo of our own unsubscribe, whose
+        // state was already cleared when it was sent. A surface switch that
+        // lands back on the same surface (focus flaps between the locally
+        // tapped surface and the pane-derived one until pane.list catches up)
+        // sends unsubscribe + subscribe back to back, so this echo routinely
+        // arrives AFTER the new subscription — acting on it tore down the
+        // live feed the bridge was in fact streaming, and the card fell back
+        // to text.
+        guard push.reason != "unsubscribed" else { return }
         framesSubscribed.remove(push.surfaceID)
         frameFeeds.removeValue(forKey: push.surfaceID)
-        guard push.reason != "unsubscribed", push.surfaceID == frameFocusedSurfaceID else { return }
+        guard push.surfaceID == frameFocusedSurfaceID else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self, self.frameFocusedSurfaceID == push.surfaceID else { return }
             self.subscribeFrames(for: push.surfaceID)
