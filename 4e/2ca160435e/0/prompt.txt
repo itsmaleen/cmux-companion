@@ -1,0 +1,9 @@
+quit the simulator and I'll start testing on my iphone
+
+---
+
+launch xcode from the right path/branch
+
+---
+
+so the responsivness seems fixed even when switching screens but issues are 1) now scroll doesnt work at all 2) when typing and keyboard is up, surface switching isnt disabled i.e swiping right or left accidentally switches surface

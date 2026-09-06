@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "4e2ca160435e",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "ios/cmux.xcodeproj/project.pbxproj",
+    "ios/cmux/App/AppState.swift",
+    "ios/cmux/Layout/FrameFit.swift",
+    "ios/cmux/Layout/LivePaneView.swift",
+    "ios/cmux/Layout/PaneCardView.swift",
+    "ios/cmux/Layout/StaticTerminalTextView.swift",
+    "ios/cmux/Layout/TerminalTextView.swift",
+    "ios/cmux/Layout/WorkspaceLayoutView.swift",
+    "ios/screenshots/claude-portrait.png",
+    "ios/screenshots/shell-portrait.png",
+    "ios/scripts/test-frame-fit.swift"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4e/2ca160435e/0/metadata.json",
+      "transcript": "/4e/2ca160435e/0/full.jsonl",
+      "compact_transcript": "/4e/2ca160435e/0/transcript.jsonl",
+      "content_hash": "/4e/2ca160435e/0/content_hash.txt",
+      "prompt": "/4e/2ca160435e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 458,
+    "cache_creation_tokens": 46916,
+    "cache_read_tokens": 7349896,
+    "output_tokens": 28010,
+    "api_call_count": 19
+  }
+}
