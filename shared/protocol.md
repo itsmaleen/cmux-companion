@@ -199,6 +199,20 @@ grid from the pane's actual contents, silently and permanently. Ending the
 stream and letting the phone resubscribe (getting a fresh full frame) is the
 same "skip ahead, never corrupt" trade mosh makes for a laggy connection.
 
+### surface.fit.ended
+
+Sent only to the connection holding the fit, and only when it ends **on its
+own** — the runtime closed it, or its controlling process died. `reason` is
+`closed` or `error`. Releasing a fit yourself (`surface.fit.release`, or the
+connection closing) never sends this: you already know why.
+
+```json
+{
+  "type": "surface.fit.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "closed" }
+}
+```
+
 ### connected
 
 Sent immediately after WebSocket handshake + auth succeeds.
@@ -410,6 +424,39 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
   Ends the stream if one is running; a push
   (`surface.frames.ended {reason:"unsubscribed"}`) follows. Not an error if
   nothing was subscribed.
+
+**Fit to phone (herdr only — resizes the real PTY):**
+- `surface.fit` — `{"surface_id":"...","cols":60,"rows":20}` →
+  `{"surface_id":"...","cols":60,"rows":20}`.
+
+  Temporarily resizes the surface's actual PTY to `cols`x`rows` for as long as
+  this connection holds the fit, so a full-screen TUI (opencode, Claude Code)
+  re-layouts for the phone's screen — e.g. opencode hides its sidebar when
+  narrow. This is a real resize of the terminal the agent runs in, not a
+  cosmetic crop like `surface.frames.subscribe`'s `cols`/`rows`: the Mac's own
+  window/pane layout is untouched, but whatever occupies that pane sees the
+  phone's grid the whole time the fit is held. herdr restores the pane's
+  normal size as soon as the fit is released or the connection drops — there
+  is no "native size" default here, both dimensions are required.
+
+  The first `surface.fit` for a surface on this connection starts holding it;
+  a later `surface.fit` for the **same** surface with different `cols`/`rows`
+  resizes the existing fit in place rather than tearing it down and
+  restarting — cheaper, and the agent inside never sees the PTY close. A
+  connection holds at most one fit per surface. Fits and
+  `surface.frames.subscribe` streams are independent of each other.
+
+  Errors: `unsupported` (the surface's runtime has no fit control — always
+  true for cmux), `invalid_params` (missing or non-positive `cols`/`rows`, or
+  either over 500), `not_found` (no such surface), `fit_error` (herdr ended
+  the control session before the fit was established — the message includes
+  herdr's own reason, e.g. the surface no longer existing under the hood).
+
+- `surface.fit.release` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the fit if one is held, restoring herdr's own layout size for that
+  pane. Not an error if nothing was fit. No `surface.fit.ended` push follows
+  your own release (see above) — every fit a connection holds is also
+  released, silently the same way, when the connection closes.
 
 **Input:**
 - `surface.send_text` — `{"surface_id":"...","text":"ls\n"}`

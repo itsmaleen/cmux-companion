@@ -119,6 +119,46 @@ type FrameSource interface {
 	Frames(ctx context.Context, surfaceID string, cols, rows int) (<-chan FrameEvent, FrameInfo, error)
 }
 
+// FitHandle is one surface's live PTY resize, held open for as long as the
+// phone wants the runtime's full-screen TUI laid out for its screen.
+type FitHandle interface {
+	// Resize changes the fit's PTY size in place, without tearing down and
+	// restarting the underlying control session.
+	Resize(cols, rows int) error
+	// Done is closed once the fit's underlying process has fully torn down,
+	// whether that's because it ended on its own (the runtime closed it, or
+	// it died) or because Release was called. Reason distinguishes the two:
+	// it is only non-empty when the fit ended on its own, which is what a
+	// caller should check before pushing `surface.fit.ended` — an explicit
+	// release is reported to whoever called Release, not through this
+	// channel, so a connection releasing its own fits never pushes an ended
+	// event for them.
+	Done() <-chan struct{}
+	// Reason explains why the fit ended: "closed" (the runtime ended it) or
+	// "error" (the controlling process/stream ended unexpectedly, with no
+	// explanation from the runtime). Meaningful only after Done has closed,
+	// and left empty when Done closed because of a Release.
+	Reason() string
+	// Release ends the fit, restoring the runtime's own layout size. Safe to
+	// call more than once and safe to call after the fit already ended on its
+	// own.
+	Release()
+}
+
+// Fitter is implemented by backends that can temporarily resize a surface's
+// real PTY to a size the phone requests (herdr; cmux has no such control), so
+// a full-screen TUI (opencode, Claude Code) re-layouts for the phone's
+// screen. The WebSocket handler type-asserts for it and answers
+// `surface.fit` with an `unsupported` error when a backend doesn't implement
+// it.
+type Fitter interface {
+	// Fit resizes surfaceID's terminal to cols x rows for as long as the
+	// returned handle stays open (until Release, or the connection holding it
+	// closes). A synchronous error (`not_found`, `fit_error`) means no fit was
+	// established at all.
+	Fit(ctx context.Context, surfaceID string, cols, rows int) (FitHandle, error)
+}
+
 // Hub fans push events out to WebSocket clients. Slow consumers drop events
 // rather than blocking the publisher.
 type Hub struct {

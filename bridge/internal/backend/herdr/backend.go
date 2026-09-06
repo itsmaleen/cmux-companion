@@ -59,6 +59,13 @@ type Backend struct {
 	// waiting out the real durations.
 	frameBackpressureTimeout time.Duration
 	finalFrameEventTimeout   time.Duration
+	// controlCmd builds the `herdr terminal session control` subprocess for a
+	// Fit. Tests swap it for a small script printing canned NDJSON, exactly
+	// like observeCmd.
+	controlCmd func(ctx context.Context, paneID string, cols, rows int) *exec.Cmd
+	// fitEstablishTimeout overrides defaultFitEstablishTimeout in fit.go when
+	// non-zero; tests shrink it rather than waiting out the real duration.
+	fitEstablishTimeout time.Duration
 }
 
 // New builds a herdr backend. It does not connect; Run does.
@@ -79,6 +86,7 @@ func New(cfg Config) *Backend {
 	b.dial = b.dialSubscription
 	b.dialStatus = b.dialStatusSubscription
 	b.observeCmd = b.buildObserveCmd
+	b.controlCmd = b.buildControlCmd
 	return b
 }
 

@@ -23,6 +23,11 @@ import (
 // silently buffering an unbounded amount of stale video.
 const framePushBuffer = 16
 
+// maxFitDimension bounds cols/rows a `surface.fit` may request — generous for
+// any real phone screen, but small enough that a bogus value can't make the
+// bridge spawn a PTY thousands of cells wide.
+const maxFitDimension = 500
+
 // maxIncomingMessageBytes bounds one client message. Sized from the largest
 // image a paste may carry: base64 inflates by 4/3, plus room for the JSON
 // envelope around it.
@@ -93,10 +98,23 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 	// stream. Touched only from this goroutine (the command-dispatch loop
 	// below), so it needs no lock.
 	frameSubs := make(map[string]context.CancelFunc)
-	// framePushes carries surface.frame / surface.frames.ended pushes from the
-	// per-subscription forwarder goroutines (started below) into the single
-	// writer goroutine's select loop; websocket connections aren't safe for
-	// concurrent writes.
+	// fits maps a surface_id with an active `surface.fit` to its handle.
+	// Touched only from this goroutine, same as frameSubs. A surface may have
+	// at most one fit per connection: a second surface.fit for the same
+	// surface resizes the existing fit rather than starting another.
+	fits := make(map[string]backend.FitHandle)
+	// Every fit still open when the connection ends is released here — herdr
+	// then restores the pane's own layout size. This doesn't itself push
+	// surface.fit.ended (see FitHandle.Release's doc).
+	defer func() {
+		for _, h := range fits {
+			h.Release()
+		}
+	}()
+	// framePushes carries surface.frame / surface.frames.ended /
+	// surface.fit.ended pushes from the per-subscription forwarder goroutines
+	// (started below) into the single writer goroutine's select loop;
+	// websocket connections aren't safe for concurrent writes.
 	framePushes := make(chan pushMessage, framePushBuffer)
 
 	// Subscribe to backend events BEFORE reading the connection snapshot, so a
@@ -175,6 +193,10 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 				resp = handleFramesSubscribe(cmd, be, connCtx, frameSubs, framePushes)
 			case "surface.frames.unsubscribe":
 				resp = handleFramesUnsubscribe(cmd, frameSubs, framePushes)
+			case "surface.fit":
+				resp = handleFit(cmd, be, connCtx, fits, framePushes)
+			case "surface.fit.release":
+				resp = handleFitRelease(cmd, fits)
 			default:
 				resp = dispatch(cmd, be)
 			}
@@ -417,6 +439,93 @@ func forwardFrames(ctx context.Context, surfaceID string, events <-chan backend.
 				return // the backend already ended the stream
 			}
 		}
+	}
+}
+
+// handleFit starts (or resizes) a "fit to phone" PTY resize for a surface.
+// The backend must implement backend.Fitter — cmux doesn't, so this answers
+// `unsupported` for it, standalone or namespaced behind multi. A second
+// surface.fit for a surface this connection already has a fit for writes a
+// live resize into the existing controller rather than starting another one
+// (a connection may hold at most one fit per surface).
+func handleFit(cmd commandRequest, be backend.Backend, connCtx context.Context, fits map[string]backend.FitHandle, framePushes chan<- pushMessage) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	cols := intParam(cmd.Params, "cols")
+	rows := intParam(cmd.Params, "rows")
+	if cols <= 0 || rows <= 0 {
+		return errorResponse(cmd.ID, "invalid_params", "cols and rows must be positive")
+	}
+	if cols > maxFitDimension || rows > maxFitDimension {
+		return errorResponse(cmd.ID, "invalid_params", fmt.Sprintf("cols and rows must be at most %d", maxFitDimension))
+	}
+
+	if h, exists := fits[surfaceID]; exists {
+		if err := h.Resize(cols, rows); err != nil {
+			return errorResponse(cmd.ID, "fit_error", err.Error())
+		}
+		return fitResult(cmd.ID, surfaceID, cols, rows)
+	}
+
+	fitter, ok := be.(backend.Fitter)
+	if !ok {
+		return errorResponse(cmd.ID, "unsupported", "this backend has no fit-to-phone support")
+	}
+	h, err := fitter.Fit(connCtx, surfaceID, cols, rows)
+	if err != nil {
+		return errorFor(cmd.ID, err)
+	}
+	fits[surfaceID] = h
+	go forwardFitEnded(connCtx, surfaceID, h, framePushes)
+
+	return fitResult(cmd.ID, surfaceID, cols, rows)
+}
+
+func fitResult(id, surfaceID string, cols, rows int) commandResponse {
+	result, _ := json.Marshal(map[string]any{"surface_id": surfaceID, "cols": cols, "rows": rows})
+	return commandResponse{ID: id, OK: true, Result: json.RawMessage(result)}
+}
+
+// handleFitRelease ends a surface's fit, if one is running, restoring the
+// runtime's own layout size. Releasing a surface with no active fit is not an
+// error — it's the steady state after a fit ends on its own and the phone
+// hasn't re-fit yet.
+func handleFitRelease(cmd commandRequest, fits map[string]backend.FitHandle) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	if h, ok := fits[surfaceID]; ok {
+		h.Release()
+		delete(fits, surfaceID)
+	}
+	result, _ := json.Marshal(map[string]any{"ok": true})
+	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// forwardFitEnded relays one fit's Done signal as a surface.fit.ended push.
+// An empty Reason means Done closed only because ctx was cancelled — our own
+// release (explicit, or the connection closing) — for which no push is sent;
+// see backend.FitHandle.Done's doc.
+func forwardFitEnded(ctx context.Context, surfaceID string, h backend.FitHandle, framePushes chan<- pushMessage) {
+	select {
+	case <-h.Done():
+	case <-ctx.Done():
+		return
+	}
+	reason := h.Reason()
+	if reason == "" {
+		return
+	}
+	msg := pushMessage{Type: "surface.fit.ended", Data: map[string]any{
+		"surface_id": surfaceID,
+		"reason":     reason,
+	}}
+	select {
+	case framePushes <- msg:
+	case <-ctx.Done():
 	}
 }
 

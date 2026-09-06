@@ -268,6 +268,28 @@ func (b *Backend) Frames(ctx context.Context, surfaceID string, cols, rows int) 
 	return out, info, nil
 }
 
+// Fit implements backend.Fitter, routing by the namespaced surfaceID's
+// prefix to the member that owns it. Unlike Frames there is nothing in the
+// returned handle to re-namespace — a FitHandle carries no surface id of its
+// own — so the member's handle is simply passed straight through. A member
+// that doesn't itself implement Fitter (cmux) answers `unsupported`, exactly
+// as a standalone instance of it would.
+func (b *Backend) Fit(ctx context.Context, surfaceID string, cols, rows int) (backend.FitHandle, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	fitter, ok := m.Backend.(backend.Fitter)
+	if !ok {
+		return nil, backend.Errorf("unsupported", kind+" has no fit-to-phone support")
+	}
+	return fitter.Fit(ctx, id, cols, rows)
+}
+
 // fanOut runs a command on every connected member and merges the results;
 // one member failing is tolerated as long as another answered.
 func (b *Backend) fanOut(method string, params map[string]any, merge func(map[string]json.RawMessage) any) (json.RawMessage, error) {
