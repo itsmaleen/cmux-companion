@@ -145,6 +145,9 @@ struct TerminalTextView: UIViewRepresentable {
         /// a freshly built string never equals what's on screen, and SwiftUI
         /// calls updateUIView far more often than the text changes.
         private var applied: TerminalTextSnapshot?
+        /// The live screen's range in the text view's storage after the last
+        /// apply, so the next live-only update edits that range in place.
+        private var appliedLiveRange: NSRange?
         /// The snapshot most recently handed to the background builder, so a
         /// re-render of the parent view doesn't queue a duplicate build.
         private var pending: TerminalTextSnapshot?
@@ -186,8 +189,38 @@ struct TerminalTextView: UIViewRepresentable {
             let distanceFromBottom = max(0, oldHeight - (oldOffset.y + viewportHeight))
             let anchor = ScrollFollow.anchor(autoScroll: autoScroll, oldText: oldText, newText: snapshot.text)
 
+            // A live-screen update with unchanged history edits only the live
+            // range in place. Replacing the whole attributed text several
+            // times a second re-laid out thousands of history lines each time
+            // and blinked visibly on a device; the history above the live
+            // screen does not move, so the viewport keeps its offset.
+            if let previous = applied, let previousRange = appliedLiveRange, let newRange = built.liveRange,
+               previous.historyKey == snapshot.historyKey,
+               previousRange.location + previousRange.length <= tv.textStorage.length {
+                let live = attr.attributedSubstring(from: newRange)
+                tv.textStorage.beginEditing()
+                tv.textStorage.replaceCharacters(in: previousRange, with: live)
+                tv.textStorage.endEditing()
+                appliedLiveRange = NSRange(location: previousRange.location, length: live.length)
+                applied = snapshot
+                if autoScroll {
+                    scrollToBottom(tv)
+                } else {
+                    programmatically {
+                        tv.layoutIfNeeded()
+                        let maxOffsetY = max(0, tv.contentSize.height - viewportHeight)
+                        let clampedY = min(oldOffset.y, maxOffsetY)
+                        if abs(tv.contentOffset.y - clampedY) > 0.5 {
+                            tv.setContentOffset(CGPoint(x: oldOffset.x, y: clampedY), animated: false)
+                        }
+                    }
+                }
+                return
+            }
+
             tv.attributedText = attr
             applied = snapshot
+            appliedLiveRange = built.liveRange
 
             if reportedMatchCount != built.matches.count {
                 reportedMatchCount = built.matches.count
@@ -392,6 +425,9 @@ enum TerminalTextRenderer {
     struct Built {
         let attributed: NSAttributedString
         let matches: [NSRange]
+        /// Where the live screen sits inside `attributed`, when there is one,
+        /// so a later update can replace just that range.
+        var liveRange: NSRange? = nil
     }
 
     /// Every match gets this wash; the current one gets `currentMatchColor` so
@@ -444,8 +480,9 @@ enum TerminalTextRenderer {
                 .paragraphStyle: style,
             ]))
         }
+        let liveRange = NSRange(location: attr.length, length: live.length)
         attr.append(live)
-        return Built(attributed: attr, matches: history.matches)
+        return Built(attributed: attr, matches: history.matches, liveRange: liveRange)
     }
 
     private static func buildHistory(_ snapshot: TerminalTextSnapshot) -> Built {
