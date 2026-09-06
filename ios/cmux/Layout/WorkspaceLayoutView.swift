@@ -714,7 +714,7 @@ struct WorkspaceLayoutView: View {
             transcript: speechManager.transcript,
             terminalText: surface.isBrowser ? "" : appState.cardText(for: surface),
             contentScale: contentScale,
-            frameFeed: surface.isBrowser ? nil : appState.frameFeeds[surface.id],
+            liveScreen: surface.isBrowser ? nil : appState.screenModels[surface.id],
             onLiveSizeChanged: { appState.reportLiveCardSize(surface.id, $0) },
             liveHistoryText: surface.hasTranscript
                 ? (appState.claudeTranscript[surface.id] ?? "")

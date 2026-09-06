@@ -8,7 +8,7 @@ import Foundation
 /// UIKit-free on purpose so both pieces are exercised by
 /// `ios/scripts/test-frame-fit.swift` without booting a simulator.
 enum FrameFit {
-    /// The smallest and largest font sizes LivePaneView will pick. Below the
+    /// The smallest and largest font sizes a live screen is rendered at. Below the
     /// minimum, glyphs become unreadable; above the maximum, a narrow card
     /// with few columns would otherwise blow up to a silly type size.
     static let minFontSize: CGFloat = 5

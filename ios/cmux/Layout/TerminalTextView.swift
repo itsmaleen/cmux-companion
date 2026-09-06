@@ -45,6 +45,12 @@ struct TerminalTextView: UIViewRepresentable {
     /// Reports whether the view is pinned to the bottom, so the parent can offer
     /// a jump-to-bottom affordance only when it would do something.
     var onAtBottomChanged: ((Bool) -> Void)? = nil
+    /// A surface's live screen, already rendered (see ScreenModel), shown
+    /// below `text` (the history) behind a divider. `liveVersion` is what
+    /// identifies it: the attributed string is compared by version, never by
+    /// content, so a card re-evaluating without a new update rebuilds nothing.
+    var liveScreen: NSAttributedString? = nil
+    var liveVersion: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -337,14 +343,18 @@ struct TerminalTextSnapshot: Equatable {
     let trimMarkdownLinks: Bool
     let searchQuery: String
     let currentMatchIndex: Int
+    let liveScreen: NSAttributedString?
+    let liveVersion: Int
 
-    init(text: String, fontSize: CGFloat, textOpacity: Double, trimMarkdownLinks: Bool = false, searchQuery: String = "", currentMatchIndex: Int = 0) {
+    init(text: String, fontSize: CGFloat, textOpacity: Double, trimMarkdownLinks: Bool = false, searchQuery: String = "", currentMatchIndex: Int = 0, liveScreen: NSAttributedString? = nil, liveVersion: Int = 0) {
         self.text = text
         self.fontSize = fontSize
         self.textOpacity = textOpacity
         self.trimMarkdownLinks = trimMarkdownLinks
         self.searchQuery = searchQuery
         self.currentMatchIndex = currentMatchIndex
+        self.liveScreen = liveScreen
+        self.liveVersion = liveVersion
     }
 
     init(_ view: TerminalTextView) {
@@ -354,6 +364,21 @@ struct TerminalTextSnapshot: Equatable {
         trimMarkdownLinks = view.trimMarkdownLinks
         searchQuery = view.searchQuery
         currentMatchIndex = view.currentMatchIndex
+        liveScreen = view.liveScreen
+        liveVersion = view.liveVersion
+    }
+
+    /// The history-only part of this snapshot: the key the expensive build
+    /// (attributed history + link detection + search) is cached under.
+    var historyKey: TerminalTextSnapshot {
+        TerminalTextSnapshot(text: text, fontSize: fontSize, textOpacity: textOpacity, trimMarkdownLinks: trimMarkdownLinks, searchQuery: searchQuery, currentMatchIndex: currentMatchIndex)
+    }
+
+    static func == (a: TerminalTextSnapshot, b: TerminalTextSnapshot) -> Bool {
+        a.text == b.text && a.fontSize == b.fontSize && a.textOpacity == b.textOpacity
+            && a.trimMarkdownLinks == b.trimMarkdownLinks && a.searchQuery == b.searchQuery
+            && a.currentMatchIndex == b.currentMatchIndex
+            && (a.liveScreen == nil) == (b.liveScreen == nil) && a.liveVersion == b.liveVersion
     }
 }
 
@@ -374,7 +399,56 @@ enum TerminalTextRenderer {
     private static let matchColor = UIColor.systemYellow.withAlphaComponent(0.28)
     private static let currentMatchColor = UIColor.systemYellow.withAlphaComponent(0.85)
 
+    /// Divider between the history and a live screen below it.
+    static let liveScreenDivider = "──────────  live screen  ──────────"
+
+    /// The last few history builds, keyed by everything but the live screen.
+    /// A live update arrives several times a second; without this, each one
+    /// would redo link detection and search over thousands of history lines.
+    private static let historyCache = HistoryBuildCache()
+
+    final class HistoryBuildCache {
+        private let lock = NSLock()
+        private var entries: [(key: TerminalTextSnapshot, built: Built)] = []
+        private let capacity = 6
+
+        func lookup(_ key: TerminalTextSnapshot) -> Built? {
+            lock.lock(); defer { lock.unlock() }
+            return entries.first(where: { $0.key == key })?.built
+        }
+
+        func store(_ key: TerminalTextSnapshot, _ built: Built) {
+            lock.lock(); defer { lock.unlock() }
+            entries.removeAll(where: { $0.key == key })
+            entries.append((key, built))
+            if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
+        }
+    }
+
     static func build(_ snapshot: TerminalTextSnapshot) -> Built {
+        let key = snapshot.historyKey
+        let history = historyCache.lookup(key) ?? {
+            let built = buildHistory(key)
+            historyCache.store(key, built)
+            return built
+        }()
+        guard let live = snapshot.liveScreen else { return history }
+        let attr = NSMutableAttributedString(attributedString: history.attributed)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 1
+        let dividerFont = UIFont.monospacedSystemFont(ofSize: snapshot.fontSize, weight: .regular)
+        if attr.length > 0 {
+            attr.append(NSAttributedString(string: "\n\n" + liveScreenDivider + "\n\n", attributes: [
+                .font: dividerFont,
+                .foregroundColor: UIColor.white.withAlphaComponent(0.35),
+                .paragraphStyle: style,
+            ]))
+        }
+        attr.append(live)
+        return Built(attributed: attr, matches: history.matches)
+    }
+
+    private static func buildHistory(_ snapshot: TerminalTextSnapshot) -> Built {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 1
         let attr = NSMutableAttributedString(

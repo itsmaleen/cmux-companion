@@ -8,13 +8,12 @@ struct PaneCardView: View {
     let transcript: String
     var terminalText: String = ""
     var contentScale: CGFloat = 1.0
-    /// The focused surface's live terminal frame stream, when the bridge
-    /// supports it and a subscribe has succeeded. Non-nil switches the card
-    /// from the polled-text `TerminalTextView` to `LivePaneView`, a real ANSI
-    /// emulator fed frames directly (bypassing SwiftUI's render cycle — see
-    /// `AppState.FrameFeed`). nil (no support, subscribe still pending, or a
-    /// non-focused card) renders exactly as before.
-    var frameFeed: FrameFeed?
+    /// The focused surface's live screen, when the bridge streams one and a
+    /// subscribe has succeeded. Non-nil makes the card render history above
+    /// the bridge-rendered live screen in one text view; nil (no support,
+    /// subscribe still pending, or a non-focused card) renders exactly as
+    /// before.
+    var liveScreen: ScreenModel?
     /// Reports the live card's content size (the area a fitted pane should
     /// fill), on first layout and whenever it changes.
     var onLiveSizeChanged: ((CGSize) -> Void)? = nil
@@ -103,8 +102,8 @@ struct PaneCardView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let frameFeed {
-                        liveContentView(frameFeed)
+                    } else if let liveScreen {
+                        liveContentView(liveScreen)
                     } else if !terminalText.isEmpty {
                         terminalContentView
                     } else {
@@ -151,31 +150,21 @@ struct PaneCardView: View {
 
     // MARK: - Live terminal content
 
-    /// The live card: one vertical scroll container holding the surface's
-    /// history (conversation or polled scrollback) above the emulator, anchored
-    /// to the bottom so the live screen is what you see until you drag up.
-    private func liveContentView(_ feed: FrameFeed) -> some View {
-        LiveCardContent(
-            feed: feed,
-            historyText: liveHistoryText,
-            historyIsPolledScreen: liveHistoryIsPolledScreen,
-            fontSize: (isFocused ? 9 : 7) * contentScale,
-            scrollToBottomRequest: scrollToBottomRequest,
-            onSizeChanged: onLiveSizeChanged
-        )
-        .overlay(alignment: .topTrailing) {
-            if isFocused && canOpenHistory {
-                historyButton
-                    .padding(.trailing, 10)
-                    .padding(.top, 8)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if isFocused {
-                jumpToBottomButton
-                    .padding(.trailing, 10)
-                    .padding(.bottom, 10)
-            }
+    /// The live card: the surface's history (conversation or polled
+    /// scrollback) above the bridge-rendered live screen, in the one text view
+    /// every card uses — same scrolling, selection, search and anchoring.
+    private func liveContentView(_ screen: ScreenModel) -> some View {
+        LiveTextCard(screen: screen, onSizeChanged: onLiveSizeChanged) { screen, width in
+            // Fit the screen's columns into the card (minus the text view's
+            // 8pt insets); history keeps the card's normal type size.
+            let liveFont = FrameFit.fontSize(
+                forColumns: screen.cols, viewWidth: max(0, width - 16),
+                advanceOfMAt1pt: LiveCellMetrics.advanceOfMAt1pt
+            )
+            let history = liveHistoryIsPolledScreen
+                ? FrameFit.historyAboveLiveScreen(polledText: liveHistoryText, usedRows: screen.usedRows)
+                : liveHistoryText
+            textContent(text: history, liveScreen: screen.attributed(fontSize: liveFont), liveVersion: screen.version)
         }
     }
 
@@ -200,12 +189,16 @@ struct PaneCardView: View {
     // MARK: - Terminal content
 
     private var terminalContentView: some View {
+        textContent(text: terminalText, liveScreen: nil, liveVersion: 0)
+    }
+
+    private func textContent(text: String, liveScreen: NSAttributedString?, liveVersion: Int) -> some View {
         // UITextView-backed so output is selectable (copy) and URLs are tappable.
         // A claude card's text is its conversation with the live screen below it;
         // pulling past the top opens the same conversation full-screen, which is
         // an easier read than this card's 9pt type.
         TerminalTextView(
-            text: terminalText,
+            text: text,
             fontSize: (isFocused ? 9 : 7) * contentScale,
             textOpacity: isFocused ? 0.85 : 0.5,
             onScrolledToTop: (isFocused && canOpenHistory) ? { onOpenHistory?() } : nil,
@@ -215,7 +208,9 @@ struct PaneCardView: View {
             currentMatchIndex: currentMatchIndex,
             onSearchMatchCount: onSearchMatchCount,
             scrollToBottomRequest: scrollToBottomRequest,
-            onAtBottomChanged: { terminalAtBottom = $0 }
+            onAtBottomChanged: { terminalAtBottom = $0 },
+            liveScreen: liveScreen,
+            liveVersion: liveVersion
         )
         .overlay(alignment: .top) {
             // Only surface the affordance once the user is at the top; a further
@@ -462,80 +457,26 @@ struct TranscriptSheetView: View {
     }
 }
 
-/// History above the live emulator, scrolled as one document. Observes the
-/// feed's geometry (not its frames) so the emulator's height and the history
-/// trim follow the pane's grid without re-rendering on every frame.
-private struct LiveCardContent: View {
-    let feed: FrameFeed
-    @ObservedObject private var geometry: FrameGeometry
-    let historyText: String
-    let historyIsPolledScreen: Bool
-    let fontSize: CGFloat
-    let scrollToBottomRequest: Int
+/// Observes a surface's ScreenModel (its `version`) and re-renders the
+/// card's text content through `content` whenever an update lands, handing it
+/// the card's width so the live screen's columns can be fitted.
+private struct LiveTextCard<Content: View>: View {
+    @ObservedObject var screen: ScreenModel
     let onSizeChanged: ((CGSize) -> Void)?
+    let content: (ScreenModel, CGFloat) -> Content
 
-    private static let liveID = "live-screen"
-
-    init(feed: FrameFeed, historyText: String, historyIsPolledScreen: Bool, fontSize: CGFloat, scrollToBottomRequest: Int, onSizeChanged: ((CGSize) -> Void)?) {
-        self.feed = feed
-        _geometry = ObservedObject(wrappedValue: feed.geometry)
-        self.historyText = historyText
-        self.historyIsPolledScreen = historyIsPolledScreen
-        self.fontSize = fontSize
-        self.scrollToBottomRequest = scrollToBottomRequest
+    init(screen: ScreenModel, onSizeChanged: ((CGSize) -> Void)?, @ViewBuilder content: @escaping (ScreenModel, CGFloat) -> Content) {
+        self.screen = screen
         self.onSizeChanged = onSizeChanged
-    }
-
-    private func liveHeight(width: CGFloat, fallback: CGFloat) -> CGFloat {
-        LiveCellMetrics.fittedHeight(columns: geometry.columns, rows: geometry.rows, width: width) ?? fallback
-    }
-
-    private var history: String {
-        historyIsPolledScreen
-            ? FrameFit.historyAboveLiveScreen(polledText: historyText, usedRows: geometry.usedRows)
-            : historyText
+        self.content = content
     }
 
     var body: some View {
         GeometryReader { geo in
-        ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !history.isEmpty {
-                        StaticTerminalTextView(text: history, fontSize: fontSize, trimMarkdownLinks: !historyIsPolledScreen)
-                        Rectangle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(height: 1)
-                            .padding(.horizontal, 8)
-                            .padding(.bottom, 4)
-                    }
-                    // The height comes from the published grid, not from the
-                    // view's own measurement: a first full frame that lands
-                    // after the card was laid out would otherwise leave the
-                    // emulator at the zero height it was measured with until
-                    // something else (the keyboard, a rotation) re-laid out
-                    // the card. Until the grid is known the emulator fills the
-                    // card, so the card never looks empty.
-                    LivePaneView(feed: feed)
-                        .frame(height: liveHeight(width: geo.size.width, fallback: geo.size.height))
-                        .id(Self.liveID)
+            content(screen, geo.size.width)
+                .onChange(of: geo.size, initial: true) { _, size in
+                    onSizeChanged?(size)
                 }
-                // Content shorter than the card sits at the top like a
-                // terminal would, instead of being pushed to the bottom by
-                // the bottom anchor below.
-                .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .topLeading)
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollIndicators(.hidden)
-            .onChange(of: geo.size, initial: true) { _, size in
-                onSizeChanged?(size)
-            }
-            .onChange(of: scrollToBottomRequest) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(Self.liveID, anchor: .bottom)
-                }
-            }
-        }
         }
     }
 }

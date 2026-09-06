@@ -81,15 +81,15 @@ final class AppState: ObservableObject {
     // Only the FOCUSED surface streams frames; the secondary strip keeps the
     // polled text. A feed is high-frequency (sub-second deltas), so its
     // payloads never go through @Published — only the existence of a
-    // surface's FrameFeed does, which is all a card needs to decide whether to
-    // show the emulator or fall back to polled text.
+    // surface's ScreenModel does, which is all a card needs to decide whether to
+    // show the live screen or fall back to polled text.
 
-    /// One live feed per surface currently streaming frames (the focused
-    /// surface, once its subscribe succeeds). Only the dictionary's KEYS are
-    /// meaningful to SwiftUI; a card checks `frameFeeds[id] != nil` to switch
-    /// modes and then pulls the FrameFeed object itself to hand to
-    /// LivePaneView — frame delivery through the object bypasses Combine.
-    @Published private(set) var frameFeeds: [String: FrameFeed] = [:]
+    /// One live screen per surface currently streaming (the focused surface,
+    /// once its subscribe succeeds). Only the dictionary's KEYS are meaningful
+    /// to SwiftUI; a card checks `screenModels[id] != nil` to switch modes and
+    /// then observes the ScreenModel itself, which publishes a version bump
+    /// per update — updates never go through this dictionary.
+    @Published private(set) var screenModels: [String: ScreenModel] = [:]
     /// Surfaces whose backend answered `unsupported` to
     /// `surface.frames.subscribe` — not re-probed on every focus.
     @Published private(set) var framesUnsupported: Set<String> = []
@@ -101,11 +101,11 @@ final class AppState: ObservableObject {
     /// computed (and re-computed after a rotation) without asking the view.
     private var liveCardSizes: [String: CGSize] = [:]
     /// Surfaces with a `surface.frames.subscribe` in flight or acknowledged.
-    /// Distinct from `frameFeeds`'s keys only during the brief window between
+    /// Distinct from `screenModels`'s keys only during the brief window between
     /// sending the subscribe and its response landing.
     private var framesSubscribed: Set<String> = []
     /// The surface frames are (or should be) streaming for — the target
-    /// `updateFrameSubscription` reconciles `framesSubscribed`/`frameFeeds`
+    /// `updateFrameSubscription` reconciles `framesSubscribed`/`screenModels`
     /// against. Tracked separately from `focusedSurfaceID` (a computed
     /// property derived from panes/surfaces) so an in-flight subscribe can
     /// tell whether focus moved on while it was outstanding.
@@ -281,8 +281,8 @@ final class AppState: ObservableObject {
         localFocusedSurfaceID = focusID
         frameFocusedSurfaceID = focusID
 
-        loadFixtureFrames(surfaceID: shellID, resourceName: "frames-shell")
-        loadFixtureFrames(surfaceID: claudeID, resourceName: "frames-claude")
+        loadFixtureScreen(surfaceID: shellID, resourceName: "screen-shell")
+        loadFixtureScreen(surfaceID: claudeID, resourceName: "screen-claude")
     }
 
     /// A short fake conversation for the fixture claude surface's card.
@@ -308,28 +308,21 @@ final class AppState: ObservableObject {
     Working on it — building the fixture pane now.
     """
 
-    /// Loads one bundled `Fixtures/<resourceName>.ndjson` file, decodes its
-    /// (single, full) recorded frame, and feeds it to a fresh FrameFeed for
+    /// Loads one bundled `Fixtures/<resourceName>.json` file — a recorded
+    /// `surface.screen` full update — into a fresh ScreenModel for
     /// `surfaceID`. A missing/unparsable resource just leaves that surface
-    /// without a feed — its card falls back to plain text, same as a real
+    /// without a model — its card falls back to plain text, same as a real
     /// `unsupported` surface would.
-    private func loadFixtureFrames(surfaceID: String, resourceName: String) {
-        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "ndjson", subdirectory: "Fixtures")
-            ?? Bundle.main.url(forResource: resourceName, withExtension: "ndjson"),
-              let contents = try? String(contentsOf: url, encoding: .utf8) else {
+    private func loadFixtureScreen(surfaceID: String, resourceName: String) {
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json", subdirectory: "Fixtures")
+            ?? Bundle.main.url(forResource: resourceName, withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let update = try? JSONDecoder().decode(ScreenUpdate.self, from: data) else {
             return
         }
-        let records = FrameFit.decodeFixtureFrames(ndjson: contents)
-        guard !records.isEmpty else { return }
-        let feed = FrameFeed()
-        frameFeeds[surfaceID] = feed
-        for record in records {
-            guard let bytes = Data(base64Encoded: record.bytes) else { continue }
-            feed.append(TerminalFrame(
-                surfaceID: surfaceID, seq: record.seq, full: record.full,
-                width: record.width, height: record.height, bytes: bytes
-            ))
-        }
+        let model = ScreenModel()
+        model.apply(update)
+        screenModels[surfaceID] = model
     }
 
     // MARK: - Notification navigation
@@ -622,7 +615,7 @@ final class AppState: ObservableObject {
         attachGeneration += 1
         deferredComposedSend = nil
         lastFocusedSurface = [:]
-        frameFeeds = [:]
+        screenModels = [:]
         framesSubscribed = []
         framesUnsupported = []
         fittedSurfaces = [:]
@@ -869,7 +862,7 @@ final class AppState: ObservableObject {
     }
 
     /// Sends `surface.frames.subscribe` for `surfaceID` and, on success,
-    /// creates its FrameFeed. A backend that answers `unsupported` is
+    /// creates its ScreenModel. A backend that answers `unsupported` is
     /// remembered in `framesUnsupported` so later focuses don't re-probe it;
     /// any other failure (not_found, frames_error, a dropped connection) just
     /// leaves the surface without a feed — its card falls back to text.
@@ -885,14 +878,14 @@ final class AppState: ObservableObject {
             params["cols"] = grid.columns
             params["rows"] = grid.rows
         }
-        sendRaw(method: "surface.frames.subscribe", params: params) { [weak self] response in
+        sendRaw(method: "surface.screen.subscribe", params: params) { [weak self] response in
             guard let self else { return }
             // Focus moved on while this was in flight — undo it rather than
             // stream frames for a surface that's no longer on screen.
             guard self.frameFocusedSurfaceID == surfaceID else {
                 self.framesSubscribed.remove(surfaceID)
                 if response.ok {
-                    self.sendRaw(method: "surface.frames.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
+                    self.sendRaw(method: "surface.screen.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
                 }
                 return
             }
@@ -903,22 +896,22 @@ final class AppState: ObservableObject {
                 }
                 return
             }
-            if self.frameFeeds[surfaceID] == nil {
-                self.frameFeeds[surfaceID] = self.makeFrameFeed(for: surfaceID)
+            if self.screenModels[surfaceID] == nil {
+                self.screenModels[surfaceID] = self.makeScreenModel(for: surfaceID)
             }
         }
     }
 
     /// A feed whose resync request restarts the surface's stream.
-    private func makeFrameFeed(for surfaceID: String) -> FrameFeed {
-        let feed = FrameFeed()
-        feed.onResyncNeeded = { [weak self] in self?.resyncFrames(surfaceID) }
-        return feed
+    private func makeScreenModel(for surfaceID: String) -> ScreenModel {
+        let model = ScreenModel()
+        model.onResyncNeeded = { [weak self] in self?.resyncFrames(surfaceID) }
+        return model
     }
 
     /// Restarts a live stream so the bridge sends a fresh full frame — the
     /// phone's view can no longer reconstruct the screen from what it kept
-    /// (see FrameFeed.onResyncNeeded). A resubscribe of an already-subscribed
+    /// (see ScreenModel.onResyncNeeded). A resubscribe of an already-subscribed
     /// surface restarts the stream on the bridge; the feed itself is kept so
     /// the card doesn't flicker back to text.
     private func resyncFrames(_ surfaceID: String) {
@@ -1006,34 +999,23 @@ final class AppState: ObservableObject {
     /// (rather than waiting for the bridge's ack) so the card falls back to
     /// text the instant focus moves away.
     private func unsubscribeFrames(_ surfaceID: String) {
-        let wasActive = framesSubscribed.remove(surfaceID) != nil || frameFeeds[surfaceID] != nil
-        frameFeeds.removeValue(forKey: surfaceID)
+        let wasActive = framesSubscribed.remove(surfaceID) != nil || screenModels[surfaceID] != nil
+        screenModels.removeValue(forKey: surfaceID)
         guard wasActive else { return }
-        sendRaw(method: "surface.frames.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
+        sendRaw(method: "surface.screen.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
     }
 
-    /// A `surface.frame` push landed. Decodes its base64 payload off the main
-    /// actor (frames arrive sub-second and can be tens of KB) and appends it
-    /// to the surface's feed. Stray frames for a surface we've since moved
-    /// focus away from are dropped rather than buffered.
-    private func handleFrame(_ push: SurfaceFramePush) {
-        guard push.surfaceID == frameFocusedSurfaceID else { return }
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let data = Data(base64Encoded: push.bytes) else { return }
-            let frame = TerminalFrame(
-                surfaceID: push.surfaceID, seq: push.seq, full: push.full,
-                width: push.width, height: push.height, bytes: data
-            )
-            await MainActor.run {
-                guard let self, push.surfaceID == self.frameFocusedSurfaceID else { return }
-                let feed = self.frameFeeds[push.surfaceID] ?? {
-                    let feed = self.makeFrameFeed(for: push.surfaceID)
-                    self.frameFeeds[push.surfaceID] = feed
-                    return feed
-                }()
-                feed.append(frame)
-            }
-        }
+    /// A `surface.screen` push landed: apply it to the surface's model (the
+    /// card observing the model repaints). Stray updates for a surface we've
+    /// since moved focus away from are dropped.
+    private func handleScreen(_ update: ScreenUpdate) {
+        guard update.surfaceID == frameFocusedSurfaceID else { return }
+        let model = screenModels[update.surfaceID] ?? {
+            let model = makeScreenModel(for: update.surfaceID)
+            screenModels[update.surfaceID] = model
+            return model
+        }()
+        model.apply(update)
     }
 
     /// A `surface.frames.ended` push landed: the bridge stopped streaming.
@@ -1053,7 +1035,7 @@ final class AppState: ObservableObject {
         // to text.
         guard push.reason != "unsubscribed" else { return }
         framesSubscribed.remove(push.surfaceID)
-        frameFeeds.removeValue(forKey: push.surfaceID)
+        screenModels.removeValue(forKey: push.surfaceID)
         guard push.surfaceID == frameFocusedSurfaceID else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self, self.frameFocusedSurfaceID == push.surfaceID else { return }
@@ -1694,107 +1676,6 @@ struct FitGrid: Equatable {
     let rows: Int
 }
 
-struct TerminalFrame {
-    let surfaceID: String
-    let seq: Int
-    let full: Bool
-    let width: Int
-    let height: Int
-    let bytes: Data
-}
-
-/// Receives frames appended to a FrameFeed. LivePaneView's coordinator
-/// conforms to this and sets itself as a feed's `sink` while its view is
-/// mounted.
-@MainActor
-protocol FrameSink: AnyObject {
-    func receive(_ frame: TerminalFrame)
-}
-
-/// A focused surface's live frame stream. Deliberately NOT `@Published` —
-/// frames arrive sub-second and this object's job is to hand them to
-/// LivePaneView's SwiftTerm view directly, bypassing Combine/SwiftUI
-/// re-renders entirely. Only a FrameFeed's EXISTENCE in
-/// `AppState.frameFeeds` is published, which is all a card needs to decide
-/// whether to show the emulator.
-///
-/// Buffers frames since the last full repaint (capped) and replays them when
-/// a sink attaches, so a LivePaneView that mounts a moment after its feed was
-/// created (or briefly detaches — e.g. during a card transition) still ends
-/// up in sync instead of showing a blank/stale screen until the next frame.
-/// The live emulator's grid, published (unlike the frames themselves) so the
-/// card can size the emulator and trim the polled history shown above it. It
-/// changes only on a full frame or when the screen's used rows change.
-@MainActor
-final class FrameGeometry: ObservableObject {
-    @Published private(set) var columns = 0
-    @Published private(set) var rows = 0
-    /// Rows from the top of the screen down to the last row with content.
-    /// The polled `surface.read_text` trims trailing blank rows the same way,
-    /// so this is exactly how many of its last lines repeat the live screen.
-    @Published private(set) var usedRows = 0
-
-    func update(columns: Int, rows: Int) {
-        if self.columns != columns { self.columns = columns }
-        if self.rows != rows { self.rows = rows }
-    }
-
-    func updateUsedRows(_ n: Int) {
-        if usedRows != n { usedRows = n }
-    }
-}
-
-@MainActor
-final class FrameFeed {
-    weak var sink: FrameSink? {
-        didSet { replayBuffered() }
-    }
-
-    let geometry = FrameGeometry()
-
-    /// Called when the feed (or its view) can no longer reconstruct the
-    /// screen from what it holds and needs the bridge to restart the stream
-    /// with a fresh full frame. Wired by AppState to a resubscribe.
-    var onResyncNeeded: (() -> Void)?
-
-    private var buffered: [TerminalFrame] = []
-    private var bufferedDeltaBytes = 0
-    /// Bounds the deltas kept since the last full frame. Dropping a delta
-    /// would make a later replay silently wrong, so instead the whole tail is
-    /// dropped and a resync requested.
-    private static let maxBufferedDeltaBytes = 4 << 20
-
-    func append(_ frame: TerminalFrame) {
-        if frame.full {
-            buffered = [frame]
-            bufferedDeltaBytes = 0
-            geometry.update(columns: frame.width, rows: frame.height)
-        } else {
-            buffered.append(frame)
-            bufferedDeltaBytes += frame.bytes.count
-            if bufferedDeltaBytes > Self.maxBufferedDeltaBytes {
-                buffered = []
-                bufferedDeltaBytes = 0
-                sink?.receive(frame)
-                onResyncNeeded?()
-                return
-            }
-        }
-        sink?.receive(frame)
-    }
-
-    func requestResync() {
-        onResyncNeeded?()
-    }
-
-    private func replayBuffered() {
-        guard let sink else { return }
-        for frame in buffered {
-            sink.receive(frame)
-        }
-    }
-}
-
 // MARK: - BridgeClientDelegate
 
 extension AppState: BridgeClientDelegate {
@@ -1827,7 +1708,7 @@ extension AppState: BridgeClientDelegate {
         // freezing on the last frame, and clear `frameFocusedSurfaceID` so
         // reconnecting resubscribes from scratch rather than treating the
         // focused surface as already subscribed.
-        frameFeeds = [:]
+        screenModels = [:]
         framesSubscribed = []
         fittedSurfaces = [:]
         frameFocusedSurfaceID = nil
@@ -1867,9 +1748,9 @@ extension AppState: BridgeClientDelegate {
             if update.workspaceID == nil || update.workspaceID == currentWorkspaceID {
                 refreshSurfaces()
             }
-        case .surfaceFrame(let push):
-            handleFrame(push)
-        case .surfaceFramesEnded(let push):
+        case .surfaceScreen(let update):
+            handleScreen(update)
+        case .surfaceScreenEnded(let push):
             handleFramesEnded(push)
         case .surfaceFitEnded(let push):
             handleFitEnded(push)

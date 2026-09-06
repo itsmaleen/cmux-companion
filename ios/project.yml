@@ -11,19 +11,6 @@ settings:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
 
-packages:
-  SwiftTerm:
-    url: https://github.com/migueldeicaza/SwiftTerm
-    # Pinned to 1.18.0 rather than the newest tag (1.20.0): 1.19.0 added
-    # SwiftTermBuildInfoPlugin, a build-tool plugin with an executable
-    # dependency that this project's fixed `xcodebuild -sdk
-    # iphonesimulator... build` invocation cannot satisfy — SPM builds the
-    # plugin's host tool under the simulator platform's build directory
-    # (`Debug-iphonesimulator/`) instead of `Debug/`, so the plugin's own
-    # invocation of it fails with "Build input file cannot be found". 1.18.0
-    # predates the plugin and has every API this app uses.
-    exactVersion: 1.18.0
-
 targets:
   cmux:
     type: application
@@ -31,8 +18,6 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - cmux
-    dependencies:
-      - package: SwiftTerm
     info:
       path: cmux/Info.plist
       properties:

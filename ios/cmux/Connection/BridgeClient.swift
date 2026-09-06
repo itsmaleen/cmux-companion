@@ -13,12 +13,12 @@ enum BridgeMessage {
     /// A surface's runtime-detected agent status or title changed (protocol 2,
     /// backends with the `agent_status` capability).
     case surfaceUpdated(SurfaceUpdate)
-    /// A streamed terminal repaint/delta for a surface this connection
-    /// subscribed to via `surface.frames.subscribe`.
-    case surfaceFrame(SurfaceFramePush)
-    /// The bridge stopped streaming frames for a surface (it was
+        /// A rendered-screen update for a surface this connection subscribed to
+    /// via `surface.screen.subscribe`: only the lines that changed.
+    case surfaceScreen(ScreenUpdate)
+    /// The bridge stopped streaming screen updates for a surface (it was
     /// unsubscribed, the surface closed, or the bridge dropped us).
-    case surfaceFramesEnded(SurfaceFramesEndedPush)
+    case surfaceScreenEnded(SurfaceFramesEndedPush)
     /// A "fit to phone" resize of a surface ended on the bridge's side (the
     /// controller herdr gave us was closed, or errored). Same shape as
     /// `surface.frames.ended`.
@@ -99,23 +99,46 @@ struct CommandError {
 /// A `surface.frame` push: a full repaint or a delta of raw PTY bytes for a
 /// surface's live terminal screen. `bytes` is base64 and decoded by the
 /// caller off the main actor — see AppState.handleFrame.
-struct SurfaceFramePush: Decodable {
+/// One styled run of a rendered screen line. `a` is a bit set: 1 bold,
+/// 2 italic, 4 underline, 8 dim, 16 inverse, 32 strikethrough.
+struct ScreenRun: Decodable, Equatable {
+    let t: String
+    let fg: String?
+    let bg: String?
+    let a: Int?
+}
+
+struct ScreenLine: Decodable {
+    let i: Int
+    let runs: [ScreenRun]
+}
+
+struct ScreenCursor: Decodable, Equatable {
+    let x: Int
+    let y: Int
+    let visible: Bool
+}
+
+/// A `surface.screen` push: the bridge's rendering of a pane. `full` carries
+/// every row; otherwise `lines` holds only the rows that changed since the
+/// previous update on the stream.
+struct ScreenUpdate: Decodable {
     let surfaceID: String
     let seq: Int
+    let cols: Int
+    let rows: Int
     let full: Bool
-    let width: Int
-    let height: Int
-    let encoding: String
-    let bytes: String
+    let cursor: ScreenCursor?
+    let lines: [ScreenLine]
 
     enum CodingKeys: String, CodingKey {
         case surfaceID = "surface_id"
-        case seq, full, width, height, encoding, bytes
+        case seq, cols, rows, full, cursor, lines
     }
 }
 
-/// A `surface.frames.ended` push: the bridge stopped streaming frames for a
-/// surface. `reason` is one of "closed", "error", "backpressure", or
+/// A `surface.screen.ended` (or `surface.fit.ended`) push: the bridge stopped a
+/// per-surface stream. `reason` is one of "closed", "error", "backpressure", or
 /// "unsubscribed".
 struct SurfaceFramesEndedPush: Decodable {
     let surfaceID: String
@@ -359,16 +382,16 @@ final class BridgeClient: NSObject {
                 return .surfaceUpdated(update)
             }
             return .ignored
-        case "surface.frame":
-            if let frameData = try? JSONSerialization.data(withJSONObject: data),
-               let frame = try? JSONDecoder().decode(SurfaceFramePush.self, from: frameData) {
-                return .surfaceFrame(frame)
+        case "surface.screen":
+            if let screenData = try? JSONSerialization.data(withJSONObject: data),
+               let update = try? JSONDecoder().decode(ScreenUpdate.self, from: screenData) {
+                return .surfaceScreen(update)
             }
             return .ignored
-        case "surface.frames.ended":
+        case "surface.screen.ended":
             if let endedData = try? JSONSerialization.data(withJSONObject: data),
                let ended = try? JSONDecoder().decode(SurfaceFramesEndedPush.self, from: endedData) {
-                return .surfaceFramesEnded(ended)
+                return .surfaceScreenEnded(ended)
             }
             return .ignored
         case "surface.fit.ended":
