@@ -236,3 +236,15 @@ final class DisplayOnlyTerminalView: TerminalView {
         }
     }
 }
+
+/// The cell size SwiftTerm will use for a monospaced font of `fontSize`
+/// points — the same arithmetic `DisplayOnlyTerminalView` sizes itself with.
+/// Used to turn a card's size into a "fit to phone" grid.
+enum LiveCellMetrics {
+    static func cell(fontSize: CGFloat) -> (width: CGFloat, height: CGFloat) {
+        let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let width = ("M" as NSString).size(withAttributes: [.font: font]).width
+        let height = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
+        return (width, height)
+    }
+}

@@ -62,6 +62,14 @@ enum QuickActionBuilder {
             QuickAction(label: "Zoom", icon: "arrow.up.left.and.arrow.down.right", section: "Terminal") {
                 appState.togglePaneZoom(sid)
             },
+            // Resizes the real pane on the Mac to this phone's grid (herdr
+            // only) so full-screen TUIs lay out for the phone; released when
+            // focus leaves the surface. The label reflects the current state.
+            QuickAction(label: appState.fittedSurfaces[sid] != nil ? "Unfit Pane" : "Fit to Phone",
+                        icon: appState.fittedSurfaces[sid] != nil ? "iphone.slash" : "iphone",
+                        section: "Terminal") {
+                appState.toggleFitToPhone(sid)
+            },
             QuickAction(label: "Search", icon: "magnifyingglass", section: "Terminal") {
                 onOpenSearch()
             },
@@ -707,6 +715,7 @@ struct WorkspaceLayoutView: View {
             terminalText: surface.isBrowser ? "" : appState.cardText(for: surface),
             contentScale: contentScale,
             frameFeed: surface.isBrowser ? nil : appState.frameFeeds[surface.id],
+            onLiveSizeChanged: { appState.reportLiveCardSize(surface.id, $0) },
             liveHistoryText: surface.hasTranscript
                 ? (appState.claudeTranscript[surface.id] ?? "")
                 : (appState.surfaceContent[surface.id] ?? ""),

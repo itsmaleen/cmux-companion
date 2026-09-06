@@ -75,6 +75,16 @@ check(FrameFit.historyAboveLiveScreen(polledText: "a\n\n\nx\ny", usedRows: 2) ==
 check(FrameFit.historyAboveLiveScreen(polledText: "a\nb", usedRows: 0) == "a\nb",
       "no frame yet leaves the text untouched")
 
+print("FrameFit.gridToFit")
+check(FrameFit.gridToFit(size: CGSize(width: 400, height: 800), cellWidth: 5, cellHeight: 10) == (80, 80),
+      "divides the card by the cell size, rounding down")
+check(FrameFit.gridToFit(size: CGSize(width: 50, height: 20), cellWidth: 5, cellHeight: 10) == (20, 5),
+      "clamps to the minimum usable grid")
+check(FrameFit.gridToFit(size: CGSize(width: 100000, height: 100000), cellWidth: 5, cellHeight: 10) == (500, 500),
+      "clamps to herdr's maximum")
+check(FrameFit.gridToFit(size: .zero, cellWidth: 5, cellHeight: 10) == (20, 5),
+      "no size yet yields the minimum, never zero")
+
 if failures > 0 {
     print("\n\(failures) failure(s)")
     exit(1)

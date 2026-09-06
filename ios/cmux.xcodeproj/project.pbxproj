@@ -63,12 +63,12 @@
 		35B7A4CAA64894DF972AEDAE /* WorkspaceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceListView.swift; sourceTree = "<group>"; };
 		39BE8E43E467BCFC6B5B461D /* QuickActionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActionStore.swift; sourceTree = "<group>"; };
 		3D25694C4F70C053AA59C5F9 /* FrameFit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameFit.swift; sourceTree = "<group>"; };
-		412D879AFB50A2A5222B41D0 /* frames-shell.ndjson */ = {isa = PBXFileReference; path = "frames-shell.ndjson"; sourceTree = "<group>"; };
-		46410B90D2F45E6882E585AD /* cmux.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = cmux.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		412D879AFB50A2A5222B41D0 /* frames-shell.ndjson */ = {isa = PBXFileReference; lastKnownFileType = text; path = "frames-shell.ndjson"; sourceTree = "<group>"; };
+		46410B90D2F45E6882E585AD /* cmux.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = cmux.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		596F9B788F4E2C23D9D0A422 /* SpeechInputManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechInputManager.swift; sourceTree = "<group>"; };
 		64B351B6ABD7CDE8B988761F /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		69F25B209C51E90142C0AE24 /* ScrollFollow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollFollow.swift; sourceTree = "<group>"; };
-		6CE0DD26D74BFB717A293094 /* frames-claude.ndjson */ = {isa = PBXFileReference; path = "frames-claude.ndjson"; sourceTree = "<group>"; };
+		6CE0DD26D74BFB717A293094 /* frames-claude.ndjson */ = {isa = PBXFileReference; lastKnownFileType = text; path = "frames-claude.ndjson"; sourceTree = "<group>"; };
 		6EF950ACFA51B53FD47EF868 /* PaneCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneCardView.swift; sourceTree = "<group>"; };
 		710D3E1EC08C2DA7FC818B4F /* TranscriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEditorView.swift; sourceTree = "<group>"; };
 		7C999B61A5A503F23419E27C /* ImageScaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageScaling.swift; sourceTree = "<group>"; };
@@ -278,7 +278,6 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					D6E5ED0C8EADF9B00BC1627F = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -490,7 +489,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = W7SDNRPA36;
 				INFOPLIST_FILE = cmux/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

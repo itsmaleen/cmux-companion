@@ -15,6 +15,9 @@ struct PaneCardView: View {
     /// `AppState.FrameFeed`). nil (no support, subscribe still pending, or a
     /// non-focused card) renders exactly as before.
     var frameFeed: FrameFeed?
+    /// Reports the live card's content size (the area a fitted pane should
+    /// fill), on first layout and whenever it changes.
+    var onLiveSizeChanged: ((CGSize) -> Void)? = nil
     /// What a live card shows ABOVE the emulator: the conversation for an
     /// agent surface, the polled scrollback for a plain shell.
     var liveHistoryText: String = ""
@@ -157,7 +160,8 @@ struct PaneCardView: View {
             historyText: liveHistoryText,
             historyIsPolledScreen: liveHistoryIsPolledScreen,
             fontSize: (isFocused ? 9 : 7) * contentScale,
-            scrollToBottomRequest: scrollToBottomRequest
+            scrollToBottomRequest: scrollToBottomRequest,
+            onSizeChanged: onLiveSizeChanged
         )
         .overlay(alignment: .topTrailing) {
             if isFocused && canOpenHistory {
@@ -468,16 +472,18 @@ private struct LiveCardContent: View {
     let historyIsPolledScreen: Bool
     let fontSize: CGFloat
     let scrollToBottomRequest: Int
+    let onSizeChanged: ((CGSize) -> Void)?
 
     private static let liveID = "live-screen"
 
-    init(feed: FrameFeed, historyText: String, historyIsPolledScreen: Bool, fontSize: CGFloat, scrollToBottomRequest: Int) {
+    init(feed: FrameFeed, historyText: String, historyIsPolledScreen: Bool, fontSize: CGFloat, scrollToBottomRequest: Int, onSizeChanged: ((CGSize) -> Void)?) {
         self.feed = feed
         _geometry = ObservedObject(wrappedValue: feed.geometry)
         self.historyText = historyText
         self.historyIsPolledScreen = historyIsPolledScreen
         self.fontSize = fontSize
         self.scrollToBottomRequest = scrollToBottomRequest
+        self.onSizeChanged = onSizeChanged
     }
 
     private var history: String {
@@ -509,6 +515,9 @@ private struct LiveCardContent: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.hidden)
+            .onChange(of: geo.size, initial: true) { _, size in
+                onSizeChanged?(size)
+            }
             .onChange(of: scrollToBottomRequest) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(Self.liveID, anchor: .bottom)

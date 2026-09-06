@@ -47,6 +47,25 @@ enum FrameFit {
         return raw < min
     }
 
+    /// Bounds for a "fit to phone" grid: narrower than 20 columns breaks every
+    /// TUI, and herdr's PTY size is a u16 — 500 is already absurd on a phone.
+    static let minFitColumns = 20
+    static let maxFitColumns = 500
+    static let minFitRows = 5
+    static let maxFitRows = 500
+
+    /// The terminal grid that fills `size` at a cell of `cellWidth` ×
+    /// `cellHeight` points — what "fit to phone" asks the runtime to resize
+    /// the real pane to. Clamped to the bounds above.
+    static func gridToFit(size: CGSize, cellWidth: CGFloat, cellHeight: CGFloat) -> (columns: Int, rows: Int) {
+        guard size.width > 0, size.height > 0, cellWidth > 0, cellHeight > 0 else {
+            return (minFitColumns, minFitRows)
+        }
+        let columns = Swift.min(maxFitColumns, Swift.max(minFitColumns, Int(size.width / cellWidth)))
+        let rows = Swift.min(maxFitRows, Swift.max(minFitRows, Int(size.height / cellHeight)))
+        return (columns, rows)
+    }
+
     /// The part of a polled screen read that belongs ABOVE a live emulator.
     /// `surface.read_text` returns scrollback *and* the visible screen, and the
     /// emulator already shows the screen, so the last `usedRows` lines (the

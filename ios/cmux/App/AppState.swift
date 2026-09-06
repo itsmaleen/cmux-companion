@@ -93,6 +93,13 @@ final class AppState: ObservableObject {
     /// Surfaces whose backend answered `unsupported` to
     /// `surface.frames.subscribe` — not re-probed on every focus.
     @Published private(set) var framesUnsupported: Set<String> = []
+    /// Surfaces whose real pane is currently resized to the phone's grid
+    /// ("fit to phone"), with that grid. herdr only; released when focus
+    /// moves away, on disconnect, or when the bridge reports the fit ended.
+    @Published private(set) var fittedSurfaces: [String: FitGrid] = [:]
+    /// The last size each surface's live card reported, so a fit can be
+    /// computed (and re-computed after a rotation) without asking the view.
+    private var liveCardSizes: [String: CGSize] = [:]
     /// Surfaces with a `surface.frames.subscribe` in flight or acknowledged.
     /// Distinct from `frameFeeds`'s keys only during the brief window between
     /// sending the subscribe and its response landing.
@@ -618,6 +625,7 @@ final class AppState: ObservableObject {
         frameFeeds = [:]
         framesSubscribed = []
         framesUnsupported = []
+        fittedSurfaces = [:]
         frameFocusedSurfaceID = nil
     }
 
@@ -850,6 +858,9 @@ final class AppState: ObservableObject {
     private func updateFrameSubscription(focusedSurfaceID newFocus: String?) {
         guard frameFocusedSurfaceID != newFocus else { return }
         if let previous = frameFocusedSurfaceID {
+            // A fit changes the pane on the Mac; it is only ever held for the
+            // surface on screen.
+            releaseFit(previous)
             unsubscribeFrames(previous)
         }
         frameFocusedSurfaceID = newFocus
@@ -867,7 +878,14 @@ final class AppState: ObservableObject {
         guard !framesSubscribed.contains(surfaceID) else { return }
         guard connectionStatus.isConnected else { return }
         framesSubscribed.insert(surfaceID)
-        sendRaw(method: "surface.frames.subscribe", params: ["surface_id": surfaceID]) { [weak self] response in
+        var params: [String: Any] = ["surface_id": surfaceID]
+        if let grid = fittedSurfaces[surfaceID] {
+            // Observe at the fitted grid, not the layout's: herdr's observer
+            // crops/pads to whatever size it is asked for.
+            params["cols"] = grid.columns
+            params["rows"] = grid.rows
+        }
+        sendRaw(method: "surface.frames.subscribe", params: params) { [weak self] response in
             guard let self else { return }
             // Focus moved on while this was in flight — undo it rather than
             // stream frames for a surface that's no longer on screen.
@@ -904,6 +922,81 @@ final class AppState: ObservableObject {
     /// surface restarts the stream on the bridge; the feed itself is kept so
     /// the card doesn't flicker back to text.
     private func resyncFrames(_ surfaceID: String) {
+        guard surfaceID == frameFocusedSurfaceID, framesSubscribed.contains(surfaceID) else { return }
+        framesSubscribed.remove(surfaceID)
+        subscribeFrames(for: surfaceID)
+    }
+
+    // MARK: Fit to phone
+
+    /// The point size a fitted pane is sized for: the same size the polled
+    /// text card uses, readable without pinching.
+    private static let fitFontSize: CGFloat = 9
+
+    /// Records the live card's size for `surfaceID`; while the surface is
+    /// fitted, a size change (rotation, keyboard) re-fits it.
+    func reportLiveCardSize(_ surfaceID: String, _ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        guard liveCardSizes[surfaceID] != size else { return }
+        liveCardSizes[surfaceID] = size
+        if fittedSurfaces[surfaceID] != nil {
+            let grid = fitGrid(for: size)
+            if fittedSurfaces[surfaceID] != grid {
+                sendFit(surfaceID, grid)
+            }
+        }
+    }
+
+    /// "Fit to phone": resize the surface's real pane on the Mac to the grid
+    /// that fills its card here, so a full-screen TUI lays itself out for the
+    /// phone (opencode drops its sidebar, Claude Code wraps to the width).
+    /// Toggles: a fitted surface is released back to its layout's size.
+    func toggleFitToPhone(_ surfaceID: String) {
+        if fittedSurfaces[surfaceID] != nil {
+            releaseFit(surfaceID)
+            return
+        }
+        guard let size = liveCardSizes[surfaceID] else { return }
+        sendFit(surfaceID, fitGrid(for: size))
+    }
+
+    private func fitGrid(for size: CGSize) -> FitGrid {
+        let cell = LiveCellMetrics.cell(fontSize: Self.fitFontSize)
+        let grid = FrameFit.gridToFit(size: size, cellWidth: cell.width, cellHeight: cell.height)
+        return FitGrid(columns: grid.columns, rows: grid.rows)
+    }
+
+    private func sendFit(_ surfaceID: String, _ grid: FitGrid) {
+        guard connectionStatus.isConnected else { return }
+        sendRaw(method: "surface.fit", params: ["surface_id": surfaceID, "cols": grid.columns, "rows": grid.rows]) { [weak self] response in
+            guard let self else { return }
+            guard response.ok else {
+                if let code = response.error?.code, code != "unsupported" {
+                    print("surface.fit failed: \(code) \(response.error?.message ?? "")")
+                }
+                return
+            }
+            self.fittedSurfaces[surfaceID] = grid
+            self.restartFrames(surfaceID)
+        }
+    }
+
+    private func releaseFit(_ surfaceID: String) {
+        guard fittedSurfaces.removeValue(forKey: surfaceID) != nil else { return }
+        sendRaw(method: "surface.fit.release", params: ["surface_id": surfaceID]) { _ in }
+        restartFrames(surfaceID)
+    }
+
+    /// The bridge ended a fit on its own (herdr closed the controller); the
+    /// pane is back at its layout size, so stream it at that size again.
+    private func handleFitEnded(_ push: SurfaceFramesEndedPush) {
+        guard fittedSurfaces.removeValue(forKey: push.surfaceID) != nil else { return }
+        restartFrames(push.surfaceID)
+    }
+
+    /// Restarts the focused surface's frame stream so it picks up the pane's
+    /// new grid with a fresh full frame.
+    private func restartFrames(_ surfaceID: String) {
         guard surfaceID == frameFocusedSurfaceID, framesSubscribed.contains(surfaceID) else { return }
         framesSubscribed.remove(surfaceID)
         subscribeFrames(for: surfaceID)
@@ -1595,6 +1688,12 @@ final class AppState: ObservableObject {
 
 /// One decoded `surface.frame` push: either a full repaint (reset + resize +
 /// feed) or a delta (feed as-is) for a surface's live terminal screen.
+/// A "fit to phone" grid: what the real pane was resized to.
+struct FitGrid: Equatable {
+    let columns: Int
+    let rows: Int
+}
+
 struct TerminalFrame {
     let surfaceID: String
     let seq: Int
@@ -1730,6 +1829,7 @@ extension AppState: BridgeClientDelegate {
         // focused surface as already subscribed.
         frameFeeds = [:]
         framesSubscribed = []
+        fittedSurfaces = [:]
         frameFocusedSurfaceID = nil
     }
 
@@ -1771,6 +1871,8 @@ extension AppState: BridgeClientDelegate {
             handleFrame(push)
         case .surfaceFramesEnded(let push):
             handleFramesEnded(push)
+        case .surfaceFitEnded(let push):
+            handleFitEnded(push)
         case .commandResponse, .ignored:
             break
         }

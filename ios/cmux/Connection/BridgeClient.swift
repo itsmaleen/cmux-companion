@@ -19,6 +19,10 @@ enum BridgeMessage {
     /// The bridge stopped streaming frames for a surface (it was
     /// unsubscribed, the surface closed, or the bridge dropped us).
     case surfaceFramesEnded(SurfaceFramesEndedPush)
+    /// A "fit to phone" resize of a surface ended on the bridge's side (the
+    /// controller herdr gave us was closed, or errored). Same shape as
+    /// `surface.frames.ended`.
+    case surfaceFitEnded(SurfaceFramesEndedPush)
     case commandResponse(CommandResponse)
     /// A push type this client doesn't know. Ignored rather than mis-parsed, so
     /// a newer bridge can add events without an older phone reacting to them.
@@ -365,6 +369,12 @@ final class BridgeClient: NSObject {
             if let endedData = try? JSONSerialization.data(withJSONObject: data),
                let ended = try? JSONDecoder().decode(SurfaceFramesEndedPush.self, from: endedData) {
                 return .surfaceFramesEnded(ended)
+            }
+            return .ignored
+        case "surface.fit.ended":
+            if let endedData = try? JSONSerialization.data(withJSONObject: data),
+               let ended = try? JSONDecoder().decode(SurfaceFramesEndedPush.self, from: endedData) {
+                return .surfaceFitEnded(ended)
             }
             return .ignored
         default:
