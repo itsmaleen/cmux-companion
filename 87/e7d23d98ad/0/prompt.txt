@@ -1,0 +1,18 @@
+The simulator is running but stuck on reconnecting - shouldn't it be able to connect because on same wifi?
+
+---
+
+did option 2
+
+---
+
+did option 2, here's the url
+cmux-bridge://pair?host=192.168.4.54&port=47821&REDACTED&tailscale_host=cmux-bridge.tail901772.ts.net&backend=cmux+herdr
+
+---
+
+done
+
+---
+
+seems to work on this specific session but when switching surfaces to other sessions, it looks like the old way with it not being responsive

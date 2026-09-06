@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "87e7d23d98ad",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "ios/cmux/App/AppState.swift"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/e7d23d98ad/0/metadata.json",
+      "transcript": "/87/e7d23d98ad/0/full.jsonl",
+      "compact_transcript": "/87/e7d23d98ad/0/transcript.jsonl",
+      "content_hash": "/87/e7d23d98ad/0/content_hash.txt",
+      "prompt": "/87/e7d23d98ad/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 298,
+    "cache_creation_tokens": 339373,
+    "cache_read_tokens": 4635504,
+    "output_tokens": 10955,
+    "api_call_count": 14
+  }
+}
