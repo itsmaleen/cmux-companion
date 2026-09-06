@@ -173,6 +173,13 @@ final class DisplayOnlyTerminalView: TerminalView {
         if applied {
             feed(byteArray: bytes[...])
             reportUsedRows()
+            // SwiftTerm schedules its own repaint behind a synchronized-output
+            // flag, a pending-display latch and a dirty-row region computed
+            // against the frame; on the phone that repaint was intermittently
+            // not happening until an unrelated relayout. The buffer is always
+            // current after a feed, so ask for the repaint unconditionally —
+            // a full-view draw a few times a second is cheap.
+            setNeedsDisplay()
         }
         deltas.append(bytes)
         deltaBytes += bytes.count
@@ -212,6 +219,7 @@ final class DisplayOnlyTerminalView: TerminalView {
         applied = true
         invalidateIntrinsicContentSize()
         reportUsedRows()
+        setNeedsDisplay()
         if replayIncomplete {
             onResyncNeeded?()
         }
