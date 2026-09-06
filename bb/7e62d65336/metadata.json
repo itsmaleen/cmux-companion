@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "bb7e62d65336",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ios/cmux.xcodeproj/project.pbxproj"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bb/7e62d65336/0/metadata.json",
+      "transcript": "/bb/7e62d65336/0/full.jsonl",
+      "compact_transcript": "/bb/7e62d65336/0/transcript.jsonl",
+      "content_hash": "/bb/7e62d65336/0/content_hash.txt",
+      "prompt": "/bb/7e62d65336/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 386,
+    "cache_creation_tokens": 36323,
+    "cache_read_tokens": 5612272,
+    "output_tokens": 25592,
+    "api_call_count": 13
+  }
+}
