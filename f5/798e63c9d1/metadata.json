@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "f5798e63c9d1",
+  "strategy": "manual-commit",
+  "branch": "feat/responsive-sessions",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "ios/cmux.xcodeproj/project.pbxproj",
+    "ios/cmux.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+    "ios/cmux/App/AppState.swift",
+    "ios/cmux/Connection/BridgeClient.swift",
+    "ios/cmux/Layout/FrameFit.swift",
+    "ios/cmux/Layout/LivePaneView.swift",
+    "ios/cmux/Layout/PaneCardView.swift",
+    "ios/cmux/Layout/ScreenModel.swift",
+    "ios/cmux/Layout/StaticTerminalTextView.swift",
+    "ios/cmux/Layout/TerminalTextView.swift",
+    "ios/cmux/Layout/WorkspaceLayoutView.swift",
+    "ios/project.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/798e63c9d1/0/metadata.json",
+      "transcript": "/f5/798e63c9d1/0/full.jsonl",
+      "compact_transcript": "/f5/798e63c9d1/0/transcript.jsonl",
+      "content_hash": "/f5/798e63c9d1/0/content_hash.txt",
+      "prompt": "/f5/798e63c9d1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4060,
+    "cache_creation_tokens": 1020617,
+    "cache_read_tokens": 52582797,
+    "output_tokens": 256677,
+    "api_call_count": 159
+  }
+}
