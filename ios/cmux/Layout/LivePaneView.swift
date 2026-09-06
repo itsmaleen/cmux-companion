@@ -134,17 +134,8 @@ final class DisplayOnlyTerminalView: TerminalView {
     /// `width`, computed the way SwiftTerm sizes a cell. nil before the
     /// first full frame.
     func fittedHeight(forWidth width: CGFloat) -> CGFloat? {
-        guard lastColumns > 0, lastRows > 0 else { return nil }
-        let size = FrameFit.fontSize(forColumns: lastColumns, viewWidth: width, advanceOfMAt1pt: Self.advanceOfMAt1pt)
-        let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        let cellHeight = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
-        return cellHeight * CGFloat(lastRows)
+        LiveCellMetrics.fittedHeight(columns: lastColumns, rows: lastRows, width: width)
     }
-
-    private static let advanceOfMAt1pt: CGFloat = {
-        let probeFont = UIFont.monospacedSystemFont(ofSize: 1, weight: .regular)
-        return ("M" as NSString).size(withAttributes: [.font: probeFont]).width
-    }()
 
     /// Counts rows top-down to the last one with content and reports a change.
     private func reportUsedRows() {
@@ -230,7 +221,7 @@ final class DisplayOnlyTerminalView: TerminalView {
     /// FrameFit's range (at the minimum the view scrolls horizontally instead
     /// of shrinking further).
     private func refitFont() {
-        let size = FrameFit.fontSize(forColumns: lastColumns, viewWidth: bounds.width, advanceOfMAt1pt: Self.advanceOfMAt1pt)
+        let size = FrameFit.fontSize(forColumns: lastColumns, viewWidth: bounds.width, advanceOfMAt1pt: LiveCellMetrics.advanceOfMAt1pt)
         if abs(size - font.pointSize) > 0.05 {
             font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         }
@@ -241,6 +232,21 @@ final class DisplayOnlyTerminalView: TerminalView {
 /// points — the same arithmetic `DisplayOnlyTerminalView` sizes itself with.
 /// Used to turn a card's size into a "fit to phone" grid.
 enum LiveCellMetrics {
+    /// Horizontal advance of one monospaced cell per point of font size.
+    static let advanceOfMAt1pt: CGFloat = {
+        let probeFont = UIFont.monospacedSystemFont(ofSize: 1, weight: .regular)
+        return ("M" as NSString).size(withAttributes: [.font: probeFont]).width
+    }()
+
+    /// The height an emulator needs for `rows` rows of `columns` columns
+    /// fitted into `width` — the same arithmetic DisplayOnlyTerminalView
+    /// sizes itself with, so the card can give it that frame explicitly.
+    static func fittedHeight(columns: Int, rows: Int, width: CGFloat) -> CGFloat? {
+        guard columns > 0, rows > 0, width > 0 else { return nil }
+        let size = FrameFit.fontSize(forColumns: columns, viewWidth: width, advanceOfMAt1pt: advanceOfMAt1pt)
+        return cell(fontSize: size).height * CGFloat(rows)
+    }
+
     static func cell(fontSize: CGFloat) -> (width: CGFloat, height: CGFloat) {
         let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let width = ("M" as NSString).size(withAttributes: [.font: font]).width

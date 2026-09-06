@@ -486,6 +486,10 @@ private struct LiveCardContent: View {
         self.onSizeChanged = onSizeChanged
     }
 
+    private func liveHeight(width: CGFloat, fallback: CGFloat) -> CGFloat {
+        LiveCellMetrics.fittedHeight(columns: geometry.columns, rows: geometry.rows, width: width) ?? fallback
+    }
+
     private var history: String {
         historyIsPolledScreen
             ? FrameFit.historyAboveLiveScreen(polledText: historyText, usedRows: geometry.usedRows)
@@ -505,7 +509,15 @@ private struct LiveCardContent: View {
                             .padding(.horizontal, 8)
                             .padding(.bottom, 4)
                     }
+                    // The height comes from the published grid, not from the
+                    // view's own measurement: a first full frame that lands
+                    // after the card was laid out would otherwise leave the
+                    // emulator at the zero height it was measured with until
+                    // something else (the keyboard, a rotation) re-laid out
+                    // the card. Until the grid is known the emulator fills the
+                    // card, so the card never looks empty.
                     LivePaneView(feed: feed)
+                        .frame(height: liveHeight(width: geo.size.width, fallback: geo.size.height))
                         .id(Self.liveID)
                 }
                 // Content shorter than the card sits at the top like a
