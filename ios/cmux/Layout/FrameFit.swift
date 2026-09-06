@@ -47,6 +47,23 @@ enum FrameFit {
         return raw < min
     }
 
+    /// The part of a polled screen read that belongs ABOVE a live emulator.
+    /// `surface.read_text` returns scrollback *and* the visible screen, and the
+    /// emulator already shows the screen, so the last `usedRows` lines (the
+    /// rows the emulator currently has content in — the read trims trailing
+    /// blank rows the same way) are dropped, along with any blank lines they
+    /// leave behind. `usedRows` of 0 (no frame yet) leaves the text as is.
+    static func historyAboveLiveScreen(polledText: String, usedRows: Int) -> String {
+        guard usedRows > 0, !polledText.isEmpty else { return polledText }
+        var lines = polledText.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > usedRows else { return "" }
+        lines.removeLast(usedRows)
+        while lines.last?.isEmpty == true {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// One line of a `frames-*.ndjson` fixture file — a recorded
     /// `surface.frame` push with no envelope (no `surface_id`, since the
     /// fixture is loaded under whatever surface id the caller assigns it to).

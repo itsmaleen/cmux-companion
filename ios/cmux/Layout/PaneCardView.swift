@@ -15,6 +15,13 @@ struct PaneCardView: View {
     /// `AppState.FrameFeed`). nil (no support, subscribe still pending, or a
     /// non-focused card) renders exactly as before.
     var frameFeed: FrameFeed?
+    /// What a live card shows ABOVE the emulator: the conversation for an
+    /// agent surface, the polled scrollback for a plain shell.
+    var liveHistoryText: String = ""
+    /// True when `liveHistoryText` is a polled screen read (scrollback plus
+    /// the visible screen), so the rows the emulator already shows must be
+    /// trimmed off its end; false for a conversation transcript.
+    var liveHistoryIsPolledScreen: Bool = false
     var isBrowser: Bool = false
     var browserURL: String = ""
     /// When true, scrolling to the top of a focused card opens the conversation
@@ -141,31 +148,31 @@ struct PaneCardView: View {
 
     // MARK: - Live terminal content
 
-    /// The live-emulator mode: LivePaneView fills the card. Nested scrolling
-    /// SwiftTerm's own scrollback UIScrollView inside the outer card layout's
-    /// ScrollView proved unworkable within reasonable effort (SwiftTerm's
-    /// `TerminalView` IS a `UIScrollView`, and two nested vertically-scrolling
-    /// views fight for the same pan gesture) — so unlike the design's
-    /// preferred inline history, a claude card's conversation stays reachable
-    /// only through the existing full-screen history sheet, via a small
-    /// button here rather than the polled-text card's "pull up" gesture
-    /// (which needs a scroll-position callback SwiftTerm doesn't expose).
+    /// The live card: one vertical scroll container holding the surface's
+    /// history (conversation or polled scrollback) above the emulator, anchored
+    /// to the bottom so the live screen is what you see until you drag up.
     private func liveContentView(_ feed: FrameFeed) -> some View {
-        LivePaneView(feed: feed, scrollToBottomRequest: scrollToBottomRequest)
-            .overlay(alignment: .topTrailing) {
-                if isFocused && canOpenHistory {
-                    historyButton
-                        .padding(.trailing, 10)
-                        .padding(.top, 8)
-                }
+        LiveCardContent(
+            feed: feed,
+            historyText: liveHistoryText,
+            historyIsPolledScreen: liveHistoryIsPolledScreen,
+            fontSize: (isFocused ? 9 : 7) * contentScale,
+            scrollToBottomRequest: scrollToBottomRequest
+        )
+        .overlay(alignment: .topTrailing) {
+            if isFocused && canOpenHistory {
+                historyButton
+                    .padding(.trailing, 10)
+                    .padding(.top, 8)
             }
-            .overlay(alignment: .bottomTrailing) {
-                if isFocused {
-                    jumpToBottomButton
-                        .padding(.trailing, 10)
-                        .padding(.bottom, 10)
-                }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isFocused {
+                jumpToBottomButton
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 10)
             }
+        }
     }
 
     private var historyButton: some View {
@@ -447,6 +454,67 @@ struct TranscriptSheetView: View {
         } else {
             TerminalTextView(text: text, fontSize: 12.5, textOpacity: 0.9, trimMarkdownLinks: true)
                 .padding(.horizontal, 4)
+        }
+    }
+}
+
+/// History above the live emulator, scrolled as one document. Observes the
+/// feed's geometry (not its frames) so the emulator's height and the history
+/// trim follow the pane's grid without re-rendering on every frame.
+private struct LiveCardContent: View {
+    let feed: FrameFeed
+    @ObservedObject private var geometry: FrameGeometry
+    let historyText: String
+    let historyIsPolledScreen: Bool
+    let fontSize: CGFloat
+    let scrollToBottomRequest: Int
+
+    private static let liveID = "live-screen"
+
+    init(feed: FrameFeed, historyText: String, historyIsPolledScreen: Bool, fontSize: CGFloat, scrollToBottomRequest: Int) {
+        self.feed = feed
+        _geometry = ObservedObject(wrappedValue: feed.geometry)
+        self.historyText = historyText
+        self.historyIsPolledScreen = historyIsPolledScreen
+        self.fontSize = fontSize
+        self.scrollToBottomRequest = scrollToBottomRequest
+    }
+
+    private var history: String {
+        historyIsPolledScreen
+            ? FrameFit.historyAboveLiveScreen(polledText: historyText, usedRows: geometry.usedRows)
+            : historyText
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !history.isEmpty {
+                        StaticTerminalTextView(text: history, fontSize: fontSize, trimMarkdownLinks: !historyIsPolledScreen)
+                        Rectangle()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(height: 1)
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 4)
+                    }
+                    LivePaneView(feed: feed)
+                        .id(Self.liveID)
+                }
+                // Content shorter than the card sits at the top like a
+                // terminal would, instead of being pushed to the bottom by
+                // the bottom anchor below.
+                .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .topLeading)
+            }
+            .defaultScrollAnchor(.bottom)
+            .scrollIndicators(.hidden)
+            .onChange(of: scrollToBottomRequest) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(Self.liveID, anchor: .bottom)
+                }
+            }
+        }
         }
     }
 }

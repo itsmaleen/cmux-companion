@@ -1614,11 +1614,35 @@ protocol FrameSink: AnyObject {
 /// a sink attaches, so a LivePaneView that mounts a moment after its feed was
 /// created (or briefly detaches — e.g. during a card transition) still ends
 /// up in sync instead of showing a blank/stale screen until the next frame.
+/// The live emulator's grid, published (unlike the frames themselves) so the
+/// card can size the emulator and trim the polled history shown above it. It
+/// changes only on a full frame or when the screen's used rows change.
+@MainActor
+final class FrameGeometry: ObservableObject {
+    @Published private(set) var columns = 0
+    @Published private(set) var rows = 0
+    /// Rows from the top of the screen down to the last row with content.
+    /// The polled `surface.read_text` trims trailing blank rows the same way,
+    /// so this is exactly how many of its last lines repeat the live screen.
+    @Published private(set) var usedRows = 0
+
+    func update(columns: Int, rows: Int) {
+        if self.columns != columns { self.columns = columns }
+        if self.rows != rows { self.rows = rows }
+    }
+
+    func updateUsedRows(_ n: Int) {
+        if usedRows != n { usedRows = n }
+    }
+}
+
 @MainActor
 final class FrameFeed {
     weak var sink: FrameSink? {
         didSet { replayBuffered() }
     }
+
+    let geometry = FrameGeometry()
 
     /// Called when the feed (or its view) can no longer reconstruct the
     /// screen from what it holds and needs the bridge to restart the stream
@@ -1636,6 +1660,7 @@ final class FrameFeed {
         if frame.full {
             buffered = [frame]
             bufferedDeltaBytes = 0
+            geometry.update(columns: frame.width, rows: frame.height)
         } else {
             buffered.append(frame)
             bufferedDeltaBytes += frame.bytes.count

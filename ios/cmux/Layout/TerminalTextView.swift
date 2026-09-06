@@ -330,13 +330,22 @@ struct TerminalTextView: UIViewRepresentable {
 
 /// The inputs that determine a rendered attributed string, captured as a value
 /// so the background builder works from an immutable copy.
-private struct TerminalTextSnapshot: Equatable {
+struct TerminalTextSnapshot: Equatable {
     let text: String
     let fontSize: CGFloat
     let textOpacity: Double
     let trimMarkdownLinks: Bool
     let searchQuery: String
     let currentMatchIndex: Int
+
+    init(text: String, fontSize: CGFloat, textOpacity: Double, trimMarkdownLinks: Bool = false, searchQuery: String = "", currentMatchIndex: Int = 0) {
+        self.text = text
+        self.fontSize = fontSize
+        self.textOpacity = textOpacity
+        self.trimMarkdownLinks = trimMarkdownLinks
+        self.searchQuery = searchQuery
+        self.currentMatchIndex = currentMatchIndex
+    }
 
     init(_ view: TerminalTextView) {
         text = view.text
@@ -351,7 +360,7 @@ private struct TerminalTextSnapshot: Equatable {
 /// Builds TerminalTextView's attributed string. A standalone enum (not a member
 /// of the View type) so its statics carry no MainActor isolation and can run in
 /// a detached task.
-private enum TerminalTextRenderer {
+enum TerminalTextRenderer {
     /// A rendered string plus where the active search matched it, so the
     /// coordinator can scroll to the current match and report the count without
     /// searching the text a second time on the main actor.

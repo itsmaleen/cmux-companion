@@ -707,6 +707,10 @@ struct WorkspaceLayoutView: View {
             terminalText: surface.isBrowser ? "" : appState.cardText(for: surface),
             contentScale: contentScale,
             frameFeed: surface.isBrowser ? nil : appState.frameFeeds[surface.id],
+            liveHistoryText: surface.hasTranscript
+                ? (appState.claudeTranscript[surface.id] ?? "")
+                : (appState.surfaceContent[surface.id] ?? ""),
+            liveHistoryIsPolledScreen: !surface.hasTranscript,
             isBrowser: surface.isBrowser,
             browserURL: appState.browserURLs[surface.id] ?? "",
             canOpenHistory: surface.hasTranscript,
@@ -749,6 +753,10 @@ struct WorkspaceLayoutView: View {
             DragGesture(minimumDistance: 50)
                 .onEnded { value in
                     guard !quickAction.isOpen else { return }
+                    // While the remote keyboard is up the user is typing at
+                    // THIS surface; a stray horizontal drag must not move
+                    // them to another one mid-command.
+                    guard !keyboardActive else { return }
                     // A drag that extended a text selection must not also
                     // switch surfaces.
                     guard !isTextSelectionActive else { return }

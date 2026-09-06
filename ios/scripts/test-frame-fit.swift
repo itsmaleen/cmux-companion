@@ -63,6 +63,18 @@ check(records.last?.seq == 3 && records.last?.bytes == "IQ==",
       "later records after a bad line still decode")
 check(FrameFit.decodeFixtureFrames(ndjson: "").isEmpty, "empty input decodes to no records")
 
+print("FrameFit.historyAboveLiveScreen")
+check(FrameFit.historyAboveLiveScreen(polledText: "a\nb\nc\nd", usedRows: 2) == "a\nb",
+      "drops the rows the emulator shows")
+check(FrameFit.historyAboveLiveScreen(polledText: "a\nb", usedRows: 2) == "",
+      "nothing above the screen when the read is only the screen")
+check(FrameFit.historyAboveLiveScreen(polledText: "a\nb", usedRows: 5) == "",
+      "a read shorter than the screen has no history")
+check(FrameFit.historyAboveLiveScreen(polledText: "a\n\n\nx\ny", usedRows: 2) == "a",
+      "blank lines left at the cut are trimmed")
+check(FrameFit.historyAboveLiveScreen(polledText: "a\nb", usedRows: 0) == "a\nb",
+      "no frame yet leaves the text untouched")
+
 if failures > 0 {
     print("\n\(failures) failure(s)")
     exit(1)

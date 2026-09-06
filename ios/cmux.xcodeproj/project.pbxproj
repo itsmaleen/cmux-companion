@@ -31,6 +31,7 @@
 		874536F786A2CBCEB8BF95B8 /* cmuxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19AA3479B26A1B9C0FC037F7 /* cmuxApp.swift */; };
 		A66072EAEC497AD9D4AF1EEC /* BridgeDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1E72205F10DF0F064030B1C /* BridgeDiscovery.swift */; };
 		A9413E362FC865CE9530E30F /* VolumeButtonHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA676C92595328331EE2B8EA /* VolumeButtonHandler.swift */; };
+		AF22E7BC4796E093803013BB /* StaticTerminalTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E390DD4346AE90CA951EC85D /* StaticTerminalTextView.swift */; };
 		BBE5F6FFB4637EE4F980DA45 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB2FCA6F59B6691541CE21E /* ConnectionStatusBar.swift */; };
 		C9EF3BB55242E1F2E1E6A135 /* WorkspaceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35B7A4CAA64894DF972AEDAE /* WorkspaceListView.swift */; };
 		CAE4DE2E046E33C1D633FB2E /* SpeechInputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 596F9B788F4E2C23D9D0A422 /* SpeechInputManager.swift */; };
@@ -84,6 +85,7 @@
 		CF01C386CD5E653D04406096 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
 		D6CEFBCA99422E02BB0230AD /* ControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlView.swift; sourceTree = "<group>"; };
 		DB415078CDF55BFD391FA38E /* TerminalTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTextView.swift; sourceTree = "<group>"; };
+		E390DD4346AE90CA951EC85D /* StaticTerminalTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StaticTerminalTextView.swift; sourceTree = "<group>"; };
 		EB9BDE82D00326AA0BB7F205 /* TerminalInputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalInputBar.swift; sourceTree = "<group>"; };
 		F3A07A8B704E8C6281F5F5ED /* SendTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendTextView.swift; sourceTree = "<group>"; };
 		F413BA8A0E66B4B661D8E738 /* SurfaceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceListView.swift; sourceTree = "<group>"; };
@@ -143,6 +145,7 @@
 				2E03F1C4DC5E1D5352F7CDF9 /* LivePaneView.swift */,
 				6EF950ACFA51B53FD47EF868 /* PaneCardView.swift */,
 				69F25B209C51E90142C0AE24 /* ScrollFollow.swift */,
+				E390DD4346AE90CA951EC85D /* StaticTerminalTextView.swift */,
 				DB415078CDF55BFD391FA38E /* TerminalTextView.swift */,
 				CF01C386CD5E653D04406096 /* TextSearch.swift */,
 				27AE8DA2D042D31BDE7B64B3 /* WorkspaceLayoutView.swift */,
@@ -345,6 +348,7 @@
 				D544B330786AAFAF5D1C7CA1 /* SendTextView.swift in Sources */,
 				0DE7EAD9D5B47A60FA75A83C /* SettingsView.swift in Sources */,
 				CAE4DE2E046E33C1D633FB2E /* SpeechInputManager.swift in Sources */,
+				AF22E7BC4796E093803013BB /* StaticTerminalTextView.swift in Sources */,
 				5DE6ED59294D6C5BA08D0C66 /* SurfaceListView.swift in Sources */,
 				DDA26A14537BE914B071D2E6 /* TerminalInputBar.swift in Sources */,
 				444C03EFF1A9FB9914F5D2F9 /* TerminalTextView.swift in Sources */,
