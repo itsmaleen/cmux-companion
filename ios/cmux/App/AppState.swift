@@ -9,8 +9,16 @@ final class AppState: ObservableObject {
     @Published var notifications: [BridgeNotification] = []
     @Published var workspaces: [Workspace] = []
     @Published var currentWorkspaceID: String?
-    @Published var surfaces: [Surface] = []
-    @Published var panes: [Pane] = []
+    // `focusedSurfaceID` (what the layout shows) is derived from these plus
+    // localFocusedSurfaceID, so the live frame stream follows every change to
+    // them — a workspace switch, for instance, only learns its focused
+    // surface once pane.list answers, well after focusSurface ran.
+    @Published var surfaces: [Surface] = [] {
+        didSet { reconcileFrameSubscription() }
+    }
+    @Published var panes: [Pane] = [] {
+        didSet { reconcileFrameSubscription() }
+    }
     @Published var isPairingPresented = false
     // Paired bridges (Macs) and which one is currently active. Persisted in the
     // Keychain via BridgeStore; a single phone can hold several and switch.
@@ -18,7 +26,9 @@ final class AppState: ObservableObject {
     @Published var selectedBridgeID: UUID?
     // Tracks the last surface explicitly focused by the user; used when surface.list
     // doesn't return is_focused and pane.list is unavailable.
-    @Published private(set) var localFocusedSurfaceID: String?
+    @Published private(set) var localFocusedSurfaceID: String? {
+        didSet { reconcileFrameSubscription() }
+    }
     @Published var surfaceContent: [String: String] = [:]
     // Surfaces whose screen moved on their most recent read_text poll. TUIs
     // repaint continuously while an agent/command runs and go static when
@@ -829,6 +839,14 @@ final class AppState: ObservableObject {
     /// A no-op when focus didn't actually move, so re-running the auto-select
     /// branches on an unrelated refresh doesn't tear down and re-subscribe a
     /// feed that's already correct.
+    /// Points the frame stream at whatever surface the layout currently
+    /// shows. Cheap when nothing changed; called from the property observers
+    /// on surfaces/panes/localFocusedSurfaceID so no code path that moves
+    /// focus can leave the stream on the previous surface.
+    private func reconcileFrameSubscription() {
+        updateFrameSubscription(focusedSurfaceID: focusedSurfaceID)
+    }
+
     private func updateFrameSubscription(focusedSurfaceID newFocus: String?) {
         guard frameFocusedSurfaceID != newFocus else { return }
         if let previous = frameFocusedSurfaceID {
