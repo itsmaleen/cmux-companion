@@ -1,0 +1,53 @@
+add fit to phone action
+
+---
+
+<task-notification>
+<task-id>a76113107607d25a0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-marlin-cmux-companion/5f208a58-560a-4703-b72c-636f904e6613/tasks/a76113107607d25a0.output</output-file>
+<status>completed</status>
+<summary>Agent "Bridge surface.fit via herdr control" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**Deviation from the setup instructions first:** this worktree's branch had not actually been built off `feat/responsive-sessions` — it was still on the pre-frames commit `ccbe1b8` (a `rename/merry`-era point), so none of the `FrameSource`/`frames.go`/`frames_test.go` infrastructure the task depends on existed yet. I confirmed the worktree's branch was exactly at the merge-base with `feat/responsive-sessions` (zero unique commits), then fast-forwarded (`git merge --ff-only feat/responsive-sessions`) to bring in that infrastructure before starting. No work was lost.
+
+**Branch/commit:** `worktree-agent-a76113107607d25a0`, commit `c8b5cbc`.
+
+**Files (all under `bridge/` and `shared/protocol.md`):**
+- `bridge/internal/backend/backend.go` — added `Fitter`/`FitHandle` interfaces (~lines 114-152, right after `FrameSource`).
+- `bridge/internal/backend/herdr/fit.go` (new) — `Backend.Fit` (spawns `herdr terminal session control`, waits ≤2s for establishment via `pumpControl`), `fitHandle` (`Resize`/`Done`/`Reason`/`Release`), `buildControlCmd`.
+- `bridge/internal/backend/herdr/backend.go` — added `controlCmd`/`fitEstablishTimeout` fields, wired default in `New`.
+- `bridge/internal/backend/multi/multi.go` — `Backend.Fit` routes by namespace prefix, `unsupported` for non-`Fitter` members (cmux needs no change — it just doesn't implement the interface).
+- `bridge/internal/ws/handler.go` — `fits map[string]backend.FitHandle`, `handleFit`/`handleFitRelease`/`forwardFitEnded`, `surface.fit`/`surface.fit.release` dispatch cases, release-all-on-connection-exit defer, reused `framePushes`.
+- `shared/protocol.md` — documented `surface.fit`, `surface.fit.release`, `surface.fit.ended`.
+- Tests: `bridge/internal/backend/herdr/fit_test.go`, `bridge/internal/backend/multi/fit_test.go`, `bridge/internal/ws/fit_test.go` (all new).
+
+**Key design point:** `Done()` closes both when a fit ends on its own *and* after an explicit `Release()` (once the subprocess is reaped) — but `Reason()` stays `""` only in the Release case, which is what the ws handler's forwarder checks to suppress `surface.fit.ended` for "our own release" per the wire contract.
+
+**Verification:**
+- `gofmt -l` clean on all touched/new files.
+- `go build ./... &amp;&amp; go vet ./...` clean.
+- `go test -race -count=1 ./...` — all packages pass.
+- Live test (`-tags live`, deleted before commit) against real herdr 0.8.2, pane `wB:p3` (idle, unfocused):
+  ```
+  viewport_rows before fit: 40
+  viewport_rows during fit (60x20): 20
+  viewport_rows after resize (50x15): 15
+  viewport_rows after release: 40
+  ```
+  No `--takeover` used; no other pane touched; installed cmux-bridge daemon untouched.
+
+No other deviations from the design brief — the establishment heuristic ("still running with no closed record after the timeout ⇒ established") matched the facts as given, confirmed live (no frame was emitted for the idle pane, and it was still treated as established).</result>
+<usage><subagent_tokens>192225</subagent_tokens><tool_uses>70</tool_uses><duration_ms>800099</duration_ms></usage>
+<worktree><worktreePath>/Users/marlin/cmux-companion/.claude/worktrees/agent-a76113107607d25a0</worktreePath><worktreeBranch>worktree-agent-a76113107607d25a0</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+live screen still isnt consistently showing. sometimes when moving between surfaces, it doesnt load but seems to show up once keyboard is up
+
+---
+
+also now looks like surface isnt updating consistently. new content doesnt show until some action is taken
