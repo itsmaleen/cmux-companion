@@ -1,0 +1,1 @@
+looks like when switching surfaces or tabs, the live screen doesnt consistently show. also unsure but opencode live screen might only be showing on herdr but not cmux. also opencode live screen looks squished because of the sidebar toggled on, we should hide it default for the mobile responsive view
