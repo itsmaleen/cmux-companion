@@ -38,6 +38,11 @@ type Capabilities struct {
 	// (`surface.frames.subscribe`), so the phone can render it with a real
 	// terminal emulator instead of polling `surface.read_text`.
 	Frames bool `json:"frames"`
+	// Screen: the runtime can stream a surface's terminal as bridge-rendered
+	// styled rows (`surface.screen.subscribe`) instead of raw frames — true
+	// whenever Frames is, since Screen is implemented generically over any
+	// FrameSource (see package screen).
+	Screen bool `json:"screen"`
 }
 
 // Info identifies the runtime behind the bridge.
@@ -143,6 +148,70 @@ type FitHandle interface {
 	// call more than once and safe to call after the fit already ended on its
 	// own.
 	Release()
+}
+
+// ScreenCursor is the emulated cursor's rendered position and visibility.
+type ScreenCursor struct {
+	X       int  `json:"x"`
+	Y       int  `json:"y"`
+	Visible bool `json:"visible"`
+}
+
+// ScreenRun is one run of identically-styled text within a rendered row.
+// Adjacent cells sharing a style are merged into one run; T is never empty
+// (a wholly blank trailing stretch of a row is trimmed away rather than sent
+// as a run of spaces). FG/BG are `#rrggbb`, omitted when the cell uses the
+// terminal's default color. A is the OR of attribute bits (0 when the run
+// carries no attributes): 1 bold, 2 italic, 4 underline, 8 dim, 16 inverse,
+// 32 strikethrough.
+type ScreenRun struct {
+	T  string `json:"t"`
+	FG string `json:"fg,omitempty"`
+	BG string `json:"bg,omitempty"`
+	A  int    `json:"a,omitempty"`
+}
+
+// ScreenLine is one rendered row, identified by its 0-based index from the
+// top of the grid.
+type ScreenLine struct {
+	I    int         `json:"i"`
+	Runs []ScreenRun `json:"runs"`
+}
+
+// ScreenUpdate is one `surface.screen` push: the rows that changed since the
+// last ScreenUpdate actually SENT on this stream, or (Full) every row —
+// including empty ones, as a line with no runs — such as the first update of
+// a stream or one following a resize.
+type ScreenUpdate struct {
+	SurfaceID string       `json:"surface_id"`
+	Seq       int          `json:"seq"`
+	Cols      int          `json:"cols"`
+	Rows      int          `json:"rows"`
+	Full      bool         `json:"full"`
+	Cursor    ScreenCursor `json:"cursor"`
+	Lines     []ScreenLine `json:"lines"`
+}
+
+// ScreenEvent is one item off a screen stream: a ScreenUpdate to relay, or a
+// terminal Ended reason ("closed", "error", "backpressure") — exactly one is
+// set, mirroring FrameEvent.
+type ScreenEvent struct {
+	Update *ScreenUpdate
+	Ended  string
+}
+
+// ScreenSource is implemented by backends that can stream a surface's
+// terminal as bridge-rendered styled rows instead of raw frames. Any
+// FrameSource gets this generically via screen.FromFrames; the WebSocket
+// handler type-asserts for it and answers `surface.screen.subscribe` with an
+// `unsupported` error when a backend doesn't implement it.
+type ScreenSource interface {
+	// Screens starts a screen stream for surfaceID at cols x rows (0 for
+	// either means the surface's native size, matching FrameSource.Frames).
+	// The returned channel is closed when the stream ends; cancel ctx to
+	// stop it early. A synchronous error (`not_found`, `frames_error`) means
+	// no stream was started at all.
+	Screens(ctx context.Context, surfaceID string, cols, rows int) (<-chan ScreenEvent, FrameInfo, error)
 }
 
 // Fitter is implemented by backends that can temporarily resize a surface's

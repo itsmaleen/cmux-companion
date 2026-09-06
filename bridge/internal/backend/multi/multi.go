@@ -58,6 +58,7 @@ func (b *Backend) Info() backend.Info {
 		caps.Browser = caps.Browser || c.Browser
 		caps.AgentStatus = caps.AgentStatus || c.AgentStatus
 		caps.Frames = caps.Frames || c.Frames
+		caps.Screen = caps.Screen || c.Screen
 		notif[c.Notifications] = true
 	}
 	switch {
@@ -256,6 +257,56 @@ func (b *Backend) Frames(ctx context.Context, surfaceID string, cols, rows int) 
 					f := *ev.Frame
 					f.SurfaceID = joinID(kind, f.SurfaceID)
 					ev = backend.FrameEvent{Frame: &f}
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, info, nil
+}
+
+// Screens implements backend.ScreenSource, routing by the namespaced
+// surfaceID's prefix to the member that owns it and re-namespacing the
+// ScreenUpdate.SurfaceID of everything that member emits — the same pattern
+// as Frames. A member that doesn't itself implement ScreenSource answers
+// `unsupported`, exactly as a standalone instance of it would.
+func (b *Backend) Screens(ctx context.Context, surfaceID string, cols, rows int) (<-chan backend.ScreenEvent, backend.FrameInfo, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.FrameInfo{}, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.FrameInfo{}, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	src, ok := m.Backend.(backend.ScreenSource)
+	if !ok {
+		return nil, backend.FrameInfo{}, backend.Errorf("unsupported", kind+" has no screen stream")
+	}
+	events, info, err := src.Screens(ctx, id, cols, rows)
+	if err != nil {
+		return nil, backend.FrameInfo{}, err
+	}
+
+	out := make(chan backend.ScreenEvent, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Update != nil {
+					u := *ev.Update
+					u.SurfaceID = joinID(kind, u.SurfaceID)
+					ev = backend.ScreenEvent{Update: &u}
 				}
 				select {
 				case out <- ev:

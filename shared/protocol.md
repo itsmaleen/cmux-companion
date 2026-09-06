@@ -199,6 +199,66 @@ grid from the pane's actual contents, silently and permanently. Ending the
 stream and letting the phone resubscribe (getting a fresh full frame) is the
 same "skip ahead, never corrupt" trade mosh makes for a laggy connection.
 
+### surface.screen
+
+Sent only to the connection that subscribed (never broadcast) while a
+`surface.screen.subscribe` stream is open. Unlike `surface.frame`, this is
+rendered on the bridge — a headless terminal emulator applies the runtime's
+raw frames and this push carries the resulting styled text runs for the rows
+that changed, coalesced to a few updates per second, so the phone renders
+without running its own emulator. `full: true` (always the first update of a
+stream, or of any restart from a resubscribe) means `lines` holds every row,
+including empty ones (as a line with no runs); otherwise `lines` holds only
+the rows that changed since the last `surface.screen` update actually **sent**
+on this stream — a tick the bridge skipped while nothing changed, or while
+coalescing several fast frames together, is not a gap to account for.
+
+```json
+{
+  "type": "surface.screen",
+  "data": {
+    "surface_id": "herdr:w1:p1",
+    "seq": 12,
+    "cols": 85,
+    "rows": 40,
+    "full": false,
+    "cursor": { "x": 3, "y": 37, "visible": true },
+    "lines": [
+      {
+        "i": 37,
+        "runs": [
+          { "t": "› ", "fg": "#c0c0c0" },
+          { "t": "hello", "a": 1, "fg": "#ffffff", "bg": "#1e1e1e" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Each line is `{"i": <0-based row>, "runs": [...]}`. A run's `t` is never
+empty — a line's trailing whitespace is trimmed away entirely, so a blank
+line is `{"i": n, "runs": []}`. `fg`/`bg` are `#rrggbb`, omitted when the run
+uses the terminal's default color (indexed/ANSI colors are resolved to RGB
+through the emulator's own palette; truecolor is passed through). `a` is the
+OR of attribute bits, omitted when zero: `1` bold, `2` italic, `4` underline,
+`8` dim, `16` inverse, `32` strikethrough. Adjacent cells sharing a style are
+merged into one run; a wide character counts as one cell of content, its
+padding cell contributing nothing.
+
+### surface.screen.ended
+
+Sent only to the subscribing connection when a screen stream stops, for any
+reason — the same `reason` values and resubscribe semantics as
+`surface.frames.ended` (`closed`, `error`, `backpressure`, `unsubscribed`).
+
+```json
+{
+  "type": "surface.screen.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "closed" }
+}
+```
+
 ### surface.fit.ended
 
 Sent only to the connection holding the fit, and only when it ends **on its
@@ -230,7 +290,8 @@ Sent immediately after WebSocket handshake + auth succeeds.
       "browser": false,
       "agent_status": true,
       "notifications": "push",
-      "frames": true
+      "frames": true,
+      "screen": true
     }
   }
 }
@@ -246,7 +307,10 @@ runtime-detected `agent_status` and `surface.updated` is pushed;
 stream and reports `frames: false` — its `surface.frames.subscribe` always
 answers `unsupported`. A composite bridge reports `frames: true` if any
 member has it; the phone should still expect `unsupported` for a surface whose
-own runtime doesn't.
+own runtime doesn't. `screen` — the runtime can stream a surface as
+bridge-rendered styled rows (`surface.screen.subscribe`) instead of raw
+frames; it is true whenever `frames` is, since the screen stream is built
+generically on top of the frame stream — same `unsupported` rules as `frames`.
 
 ## Client → Server: Commands
 
@@ -423,6 +487,32 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 - `surface.frames.unsubscribe` — `{"surface_id":"..."}` → `{"ok":true}`.
   Ends the stream if one is running; a push
   (`surface.frames.ended {reason:"unsubscribed"}`) follows. Not an error if
+  nothing was subscribed.
+
+**Screen (bridge-rendered terminal streaming, herdr only — see
+`capabilities.screen`):**
+- `surface.screen.subscribe` — `{"surface_id":"...","cols":85,"rows":40}`
+  → `{"surface_id":"...","cols":85,"rows":40}`.
+
+  Starts a live stream of the surface's terminal rendered on the bridge (a
+  headless VT emulator applies the runtime's frames) as `surface.screen`
+  pushes of styled text runs for the rows that changed — see above — so the
+  phone can render without running its own terminal emulator. `cols`/`rows`
+  are optional; omitted or `0` means the surface's own native size (the same
+  resolution `surface.frames.subscribe` would settle on), which the result
+  reports back. Subscribing again to a surface already subscribed on this
+  connection restarts the stream (a fresh full update) rather than erroring.
+  Every subscription a connection holds is torn down when the connection
+  closes. Independent of any `surface.frames.subscribe` stream on the same
+  surface — a connection may hold both at once.
+
+  Errors: `unsupported` (the surface's runtime has no frame stream — always
+  true for cmux), `not_found` (no such surface), `frames_error` (the
+  underlying stream could not be started).
+
+- `surface.screen.unsubscribe` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the stream if one is running; a push
+  (`surface.screen.ended {reason:"unsubscribed"}`) follows. Not an error if
   nothing was subscribed.
 
 **Fit to phone (herdr only — resizes the real PTY):**

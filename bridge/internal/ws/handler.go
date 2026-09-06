@@ -98,6 +98,10 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 	// stream. Touched only from this goroutine (the command-dispatch loop
 	// below), so it needs no lock.
 	frameSubs := make(map[string]context.CancelFunc)
+	// screenSubs is frameSubs' counterpart for `surface.screen.subscribe`
+	// streams. A surface may be subscribed on both a frames and a screen
+	// stream at once — they're independent, keyed in separate maps.
+	screenSubs := make(map[string]context.CancelFunc)
 	// fits maps a surface_id with an active `surface.fit` to its handle.
 	// Touched only from this goroutine, same as frameSubs. A surface may have
 	// at most one fit per connection: a second surface.fit for the same
@@ -193,6 +197,10 @@ func handleClient(w http.ResponseWriter, r *http.Request, token string, be backe
 				resp = handleFramesSubscribe(cmd, be, connCtx, frameSubs, framePushes)
 			case "surface.frames.unsubscribe":
 				resp = handleFramesUnsubscribe(cmd, frameSubs, framePushes)
+			case "surface.screen.subscribe":
+				resp = handleScreenSubscribe(cmd, be, connCtx, screenSubs, framePushes)
+			case "surface.screen.unsubscribe":
+				resp = handleScreenUnsubscribe(cmd, screenSubs, framePushes)
 			case "surface.fit":
 				resp = handleFit(cmd, be, connCtx, fits, framePushes)
 			case "surface.fit.release":
@@ -436,6 +444,105 @@ func forwardFrames(ctx context.Context, surfaceID string, events <-chan backend.
 				return
 			}
 			if ev.Frame == nil {
+				return // the backend already ended the stream
+			}
+		}
+	}
+}
+
+// handleScreenSubscribe starts (or restarts) a bridge-rendered screen stream
+// for a surface — the same lifecycle as handleFramesSubscribe, but the
+// backend must implement backend.ScreenSource instead of FrameSource.
+// Resubscribing an already-subscribed surface silently tears down the old
+// stream and starts a fresh one (a new full update): no
+// `surface.screen.ended` is pushed for it, for the same reason
+// handleFramesSubscribe doesn't.
+func handleScreenSubscribe(cmd commandRequest, be backend.Backend, connCtx context.Context, subs map[string]context.CancelFunc, framePushes chan<- pushMessage) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	src, ok := be.(backend.ScreenSource)
+	if !ok {
+		return errorResponse(cmd.ID, "unsupported", "this backend has no screen stream")
+	}
+
+	if cancel, exists := subs[surfaceID]; exists {
+		cancel()
+		delete(subs, surfaceID)
+	}
+
+	subCtx, cancel := context.WithCancel(connCtx)
+	events, info, err := src.Screens(subCtx, surfaceID, intParam(cmd.Params, "cols"), intParam(cmd.Params, "rows"))
+	if err != nil {
+		cancel()
+		return errorFor(cmd.ID, err)
+	}
+	subs[surfaceID] = cancel
+	go forwardScreens(subCtx, surfaceID, events, framePushes)
+
+	result, _ := json.Marshal(map[string]any{
+		"surface_id": surfaceID,
+		"cols":       info.Width,
+		"rows":       info.Height,
+	})
+	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// handleScreenUnsubscribe tears down a surface's screen stream, if one is
+// running, and tells the phone why it ended. Not an error if nothing was
+// subscribed — the steady state after a stream ends on its own.
+func handleScreenUnsubscribe(cmd commandRequest, subs map[string]context.CancelFunc, framePushes chan<- pushMessage) commandResponse {
+	surfaceID, _ := cmd.Params["surface_id"].(string)
+	if surfaceID == "" {
+		return errorResponse(cmd.ID, "invalid_params", "surface_id is required")
+	}
+	if cancel, ok := subs[surfaceID]; ok {
+		cancel()
+		delete(subs, surfaceID)
+		select {
+		case framePushes <- pushMessage{Type: "surface.screen.ended", Data: map[string]any{
+			"surface_id": surfaceID,
+			"reason":     "unsubscribed",
+		}}:
+		default:
+			// framePushes is already full of live traffic for other
+			// surfaces; dropping this notice is fine, the phone already
+			// knows it unsubscribed.
+		}
+	}
+	result, _ := json.Marshal(map[string]any{"ok": true})
+	return commandResponse{ID: cmd.ID, OK: true, Result: json.RawMessage(result)}
+}
+
+// forwardScreens relays one subscription's ScreenEvents onto framePushes as
+// wire pushes until the stream ends or ctx is cancelled (unsubscribe,
+// resubscribe, or connection close) — the screen counterpart of
+// forwardFrames.
+func forwardScreens(ctx context.Context, surfaceID string, events <-chan backend.ScreenEvent, framePushes chan<- pushMessage) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			var msg pushMessage
+			if ev.Update != nil {
+				msg = pushMessage{Type: "surface.screen", Data: ev.Update}
+			} else {
+				msg = pushMessage{Type: "surface.screen.ended", Data: map[string]any{
+					"surface_id": surfaceID,
+					"reason":     ev.Ended,
+				}}
+			}
+			select {
+			case framePushes <- msg:
+			case <-ctx.Done():
+				return
+			}
+			if ev.Update == nil {
 				return // the backend already ended the stream
 			}
 		}

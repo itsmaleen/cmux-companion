@@ -1,0 +1,360 @@
+{
+  "surface_id": "herdr:w2:p7",
+  "seq": 1,
+  "cols": 85,
+  "rows": 19,
+  "full": true,
+  "cursor": {
+    "x": 46,
+    "y": 18,
+    "visible": true
+  },
+  "lines": [
+    {
+      "i": 0,
+      "runs": []
+    },
+    {
+      "i": 1,
+      "runs": [
+        {
+          "t": "problems/linked-list-loop.test.ts:"
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " cycle back to index 1",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[1.61ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 3,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " no cycle",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.02ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 4,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " empty",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.02ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 5,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " single node, self loop",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.02ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 6,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " single node, no loop",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " whole list is the cycle",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 8,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — detection"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " two nodes pointing at each other",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — phase two (cycle entry)"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " entry is index 1",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.04ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 10,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — phase two (cycle entry)"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " entry is the head",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.02ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 11,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — phase two (cycle entry)"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " entry is the last node",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.02ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 12,
+      "runs": [
+        {
+          "t": "✓",
+          "fg": "#008000"
+        },
+        {
+          "t": " Linked List Loop — phase two (cycle entry)"
+        },
+        {
+          "t": " \u003e",
+          "a": 8
+        },
+        {
+          "t": " no cycle -\u003e null",
+          "a": 1
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "[0.01ms]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 13,
+      "runs": []
+    },
+    {
+      "i": 14,
+      "runs": [
+        {
+          "t": " 11 pass",
+          "fg": "#008000"
+        }
+      ]
+    },
+    {
+      "i": 15,
+      "runs": [
+        {
+          "t": " 0 fail",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 16,
+      "runs": [
+        {
+          "t": " 11 expect() calls"
+        }
+      ]
+    },
+    {
+      "i": 17,
+      "runs": [
+        {
+          "t": "Ran 11 tests across 1 file. "
+        },
+        {
+          "t": "[",
+          "a": 8
+        },
+        {
+          "t": "129.00ms",
+          "a": 9
+        },
+        {
+          "t": "]",
+          "a": 8
+        }
+      ]
+    },
+    {
+      "i": 18,
+      "runs": [
+        {
+          "t": "marlin@Marlins-MacBook-Pro-2 interview-prep %"
+        }
+      ]
+    }
+  ]
+}

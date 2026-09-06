@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
+	"github.com/itsmaleen/cmux-companion/bridge/internal/screen"
 )
 
 const (
@@ -120,6 +121,13 @@ func (b *Backend) Frames(ctx context.Context, surfaceID string, cols, rows int) 
 	out := make(chan backend.FrameEvent, frameChannelCap)
 	go pumpFrames(cctx, cancel, cmd, stdout, surfaceID, out, backpressureTimeout, finalTimeout)
 	return out, backend.FrameInfo{Width: cols, Height: rows}, nil
+}
+
+// Screens implements backend.ScreenSource by rendering this backend's own
+// frame stream (bridge-side, via a headless VT emulator) instead of shipping
+// raw ANSI bytes for the phone to interpret — see package screen.
+func (b *Backend) Screens(ctx context.Context, surfaceID string, cols, rows int) (<-chan backend.ScreenEvent, backend.FrameInfo, error) {
+	return screen.FromFrames(ctx, b, surfaceID, cols, rows)
 }
 
 // nativeSize resolves the grid to request when the phone didn't pin one:

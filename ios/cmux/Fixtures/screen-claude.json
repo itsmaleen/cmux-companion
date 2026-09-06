@@ -1,0 +1,497 @@
+{
+  "surface_id": "herdr:w1:p1",
+  "seq": 1,
+  "cols": 120,
+  "rows": 40,
+  "full": true,
+  "cursor": {
+    "x": 2,
+    "y": 37,
+    "visible": true
+  },
+  "lines": [
+    {
+      "i": 0,
+      "runs": []
+    },
+    {
+      "i": 1,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "Kept",
+          "a": 1
+        },
+        {
+          "t": " — everything that names the cmux "
+        },
+        {
+          "t": "runtime",
+          "a": 2
+        },
+        {
+          "t": " (the "
+        },
+        {
+          "t": "backend/cmux",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " package, the"
+        }
+      ]
+    },
+    {
+      "i": 2,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "\"cmux\"",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " kind, cmux socket paths, "
+        },
+        {
+          "t": "~/.cmuxterm",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": ")."
+        }
+      ]
+    },
+    {
+      "i": 3,
+      "runs": []
+    },
+    {
+      "i": 4,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "One migration nicety",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 5,
+      "runs": []
+    },
+    {
+      "i": 6,
+      "runs": [
+        {
+          "t": "  The bridge falls back to the existing "
+        },
+        {
+          "t": "~/.config/cmux-bridge",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " when the new dir"
+        }
+      ]
+    },
+    {
+      "i": 7,
+      "runs": [
+        {
+          "t": "  doesn't exist, so "
+        },
+        {
+          "t": "your token and tailnet state survive",
+          "a": 1
+        },
+        {
+          "t": " — no bridge-side re-pair."
+        }
+      ]
+    },
+    {
+      "i": 8,
+      "runs": [
+        {
+          "t": "  (The phone still re-pairs, since a new bundle id = a new app.)"
+        }
+      ]
+    },
+    {
+      "i": 9,
+      "runs": []
+    },
+    {
+      "i": 10,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "Verified",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 11,
+      "runs": []
+    },
+    {
+      "i": 12,
+      "runs": [
+        {
+          "t": "  Go build/vet/test all green on the new module path; iOS builds as "
+        },
+        {
+          "t": "merry.app",
+          "fg": "#b1b9f9"
+        }
+      ]
+    },
+    {
+      "i": 13,
+      "runs": [
+        {
+          "t": "  ("
+        },
+        {
+          "t": "dev.itsmaleen.merry",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": ", AppIcon compiled); "
+        },
+        {
+          "t": "merry-bridge --pair",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " emits a"
+        }
+      ]
+    },
+    {
+      "i": 14,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "merry-bridge://…",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " URL and connects to herdr."
+        }
+      ]
+    },
+    {
+      "i": 15,
+      "runs": []
+    },
+    {
+      "i": 16,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "Still open / your call",
+          "a": 1
+        }
+      ]
+    },
+    {
+      "i": 17,
+      "runs": []
+    },
+    {
+      "i": 18,
+      "runs": [
+        {
+          "t": "  - "
+        },
+        {
+          "t": "PR #29",
+          "a": 1
+        },
+        {
+          "t": " (surface rebrand) is folded into this branch's base but is a separate"
+        }
+      ]
+    },
+    {
+      "i": 19,
+      "runs": [
+        {
+          "t": "    open PR. Simplest is to merge "
+        },
+        {
+          "t": "#30",
+          "a": 1
+        },
+        {
+          "t": " into "
+        },
+        {
+          "t": "main",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " and close #29 (its commit is"
+        }
+      ]
+    },
+    {
+      "i": 20,
+      "runs": [
+        {
+          "t": "    included here), or merge #29 first — your call."
+        }
+      ]
+    },
+    {
+      "i": 21,
+      "runs": [
+        {
+          "t": "  - This is the breaking pass: after merge, "
+        },
+        {
+          "t": "./scripts/install-bridge.sh",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " rebuilds"
+        }
+      ]
+    },
+    {
+      "i": 22,
+      "runs": [
+        {
+          "t": "    the bridge (retires the old job, reuses your token), and you install the"
+        }
+      ]
+    },
+    {
+      "i": 23,
+      "runs": [
+        {
+          "t": "    renamed app on the phone and re-pair, then delete the old app."
+        }
+      ]
+    },
+    {
+      "i": 24,
+      "runs": []
+    },
+    {
+      "i": 25,
+      "runs": [
+        {
+          "t": "  This is still in the "
+        },
+        {
+          "t": "rename-merry-full",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " worktree. Want me to merge #30 (and close"
+        }
+      ]
+    },
+    {
+      "i": 26,
+      "runs": [
+        {
+          "t": "  #29), or leave both for you to review? And I can clean up the worktree once"
+        }
+      ]
+    },
+    {
+      "i": 27,
+      "runs": [
+        {
+          "t": "  you've decided."
+        }
+      ]
+    },
+    {
+      "i": 28,
+      "runs": []
+    },
+    {
+      "i": 29,
+      "runs": [
+        {
+          "t": "✻",
+          "fg": "#999999"
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "Cogitated for 10m 13s",
+          "fg": "#999999"
+        }
+      ]
+    },
+    {
+      "i": 30,
+      "runs": []
+    },
+    {
+      "i": 31,
+      "runs": [
+        {
+          "t": "※",
+          "fg": "#999999"
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "recap: ",
+          "fg": "#999999",
+          "a": 1
+        },
+        {
+          "t": "We renamed the project cmux → merry. The full identifier rename is",
+          "fg": "#999999",
+          "a": 2
+        }
+      ]
+    },
+    {
+      "i": 32,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "committed and pushed as PR #30 in the rename-merry-full worktree, building on the",
+          "fg": "#999999",
+          "a": 2
+        }
+      ]
+    },
+    {
+      "i": 33,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "surface rebrand PR #29. Next: decide whether to merge #30 (closing #29) or",
+          "fg": "#999999",
+          "a": 2
+        }
+      ]
+    },
+    {
+      "i": 34,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "review first.",
+          "fg": "#999999",
+          "a": 2
+        }
+      ]
+    },
+    {
+      "i": 35,
+      "runs": [
+        {
+          "t": "                                           "
+        },
+        {
+          "t": "new task? ",
+          "fg": "#999999"
+        },
+        {
+          "t": "/clear",
+          "fg": "#b1b9f9"
+        },
+        {
+          "t": " to save ",
+          "fg": "#999999"
+        },
+        {
+          "t": "796.9k tokens",
+          "fg": "#b1b9f9"
+        }
+      ]
+    },
+    {
+      "i": 36,
+      "runs": [
+        {
+          "t": "───────────────────────────────────────────────────────────────────────────────────",
+          "fg": "#888888"
+        }
+      ]
+    },
+    {
+      "i": 37,
+      "runs": [
+        {
+          "t": "❯ "
+        }
+      ]
+    },
+    {
+      "i": 38,
+      "runs": [
+        {
+          "t": "───────────────────────────────────────────────────────────────────────────────────",
+          "fg": "#888888"
+        }
+      ]
+    },
+    {
+      "i": 39,
+      "runs": [
+        {
+          "t": "  "
+        },
+        {
+          "t": "⏵⏵ bypass permissions on",
+          "fg": "#ff6b80"
+        },
+        {
+          "t": " (shift+tab to cycle) · PR",
+          "fg": "#999999"
+        },
+        {
+          "t": " "
+        },
+        {
+          "t": "#29",
+          "fg": "#ffc107",
+          "a": 4
+        },
+        {
+          "t": " · ← 1 agent",
+          "fg": "#999999"
+        },
+        {
+          "t": "          "
+        },
+        {
+          "t": "/rc",
+          "fg": "#4eba65"
+        }
+      ]
+    }
+  ]
+}

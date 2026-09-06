@@ -98,6 +98,7 @@ func (b *Backend) Info() backend.Info {
 			AgentStatus:   true,
 			Notifications: "push",
 			Frames:        true,
+			Screen:        true,
 		},
 	}
 }
