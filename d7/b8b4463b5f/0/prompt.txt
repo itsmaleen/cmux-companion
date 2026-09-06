@@ -120,3 +120,7 @@ github.com/charmbracelet/x/vt v0.0.0-20260906004030-3986e9119cf9
 ---
 
 alright lets open a PR with these changes
+
+---
+
+seems to be working the best so far, is this using more resources on the machine? also seems like sometime when keyboard is open the surface seems to “blink” - not sure why
