@@ -362,6 +362,16 @@ struct WorkspaceLayoutView: View {
             // Matches belong to the surface they were found in; carrying an
             // index across a surface switch points at nothing.
             if isSearching { closeSearch() }
+            // Fetch the newly focused surface right away. focusSurface() does
+            // this for a local tap, but focus also changes through the pane
+            // list (cmux reporting a focus change, or the brief flap while a
+            // switch settles) with no tap — and then the card sat on just the
+            // live viewport, its conversation not loading until the 3s poll.
+            // That was the "proper view only shows once the keyboard is up"
+            // bug: the keyboard press merely coincided with a poll.
+            if let focused = focusedSurface {
+                fetchContent(for: focused)
+            }
             // Clear notifications for newly focused surface after a moment
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 appState.clearNotificationsForFocusedSurface()
