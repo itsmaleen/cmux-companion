@@ -128,3 +128,7 @@ seems to be working the best so far, is this using more resources on the machine
 ---
 
 do i need restart anything for that fix?
+
+---
+
+seems like on cmux claude code, the proper responsive view only shows when keyboard is active. there seems to be some small bug there
