@@ -1,7 +1,9 @@
 // Package cmux is the cmux backend: the phone vocabulary is cmux's own socket
 // API, so commands are proxied verbatim, notifications come from polling
-// cmux's notification.list, and Claude transcripts are bound through cmux's
-// hook session store.
+// cmux's notification.list, Claude transcripts are bound through cmux's hook
+// session store, and opencode transcripts (which cmux does not bind at all
+// unless its optional opencode hooks are installed) are identified by tty and
+// title.
 package cmux
 
 import (
@@ -9,13 +11,14 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
-	"github.com/itsmaleen/cmux-companion/bridge/internal/claude"
 	"github.com/itsmaleen/cmux-companion/bridge/internal/poller"
 	"github.com/itsmaleen/cmux-companion/bridge/internal/socket"
+	"github.com/itsmaleen/cmux-companion/bridge/internal/transcripts"
 )
 
 // Config selects the cmux socket.
@@ -29,12 +32,16 @@ type Config struct {
 
 // Backend implements backend.Backend over cmux's Unix socket.
 type Backend struct {
-	cfg       Config
-	client    *socket.Client
-	hub       *backend.Hub
-	poll      *poller.Poller
-	resolver  *claude.Resolver
-	connected atomic.Bool
+	cfg        Config
+	client     *socket.Client
+	hub        *backend.Hub
+	poll       *poller.Poller
+	dispatcher *transcripts.Dispatcher
+	connected  atomic.Bool
+
+	termMu      sync.Mutex
+	terminals   []map[string]any
+	terminalsAt time.Time
 }
 
 // New builds a cmux backend. It does not connect; Run does.
@@ -45,11 +52,11 @@ func New(cfg Config) *Backend {
 	hub := backend.NewHub()
 	client := socket.NewClient(cfg.SocketPath, cfg.Password)
 	return &Backend{
-		cfg:      cfg,
-		client:   client,
-		hub:      hub,
-		poll:     poller.New(client, cfg.PollInterval, hub),
-		resolver: claude.NewResolver(),
+		cfg:        cfg,
+		client:     client,
+		hub:        hub,
+		poll:       poller.New(client, cfg.PollInterval, hub),
+		dispatcher: transcripts.New(),
 	}
 }
 
@@ -60,6 +67,7 @@ func (b *Backend) Info() backend.Info {
 			Browser:       true,
 			AgentStatus:   false,
 			Notifications: "polled",
+			Frames:        false, // cmux has no frame stream; surface.frames.subscribe answers `unsupported`.
 		},
 	}
 }
@@ -168,6 +176,12 @@ func (b *Backend) Handle(method string, params map[string]any) (json.RawMessage,
 	switch method {
 	case "claude.transcript", "agent.transcript":
 		return b.transcript(params)
+	case "surface.list":
+		result, err := b.client.Send(method, params)
+		if err != nil {
+			return nil, backend.Errorf("proxy_error", err.Error())
+		}
+		return annotateSurfaces(result, b.terminal, b.dispatcher.RunsOpencode), nil
 	}
 
 	result, err := b.client.Send(method, params)
@@ -189,69 +203,174 @@ func (b *Backend) transcript(params map[string]any) (json.RawMessage, error) {
 		listParams["workspace_id"] = wsID
 	}
 
-	listResult, err := b.client.Send("surface.list", listParams)
+	resumeBinding, found, err := b.surfaceBinding(listParams, surfaceID)
 	if err != nil {
 		return nil, backend.Errorf("transcript_error", err.Error())
 	}
 
+	// surface.list answers for ONE workspace — the current one when the
+	// caller named none. A surface in any other workspace simply isn't in the
+	// reply, and reporting "no agent here" for it would be wrong rather than
+	// empty. cmux's terminal table spans every workspace, so it can say which
+	// one to ask about.
+	var terminal map[string]any
+	if !found {
+		terminal = b.terminal(surfaceID)
+		if terminal != nil {
+			workspaceID := stringField(terminal, "workspace_id")
+			if wsID, _ := listParams["workspace_id"].(string); workspaceID != "" && workspaceID != wsID {
+				resumeBinding, _, err = b.surfaceBinding(map[string]any{"workspace_id": workspaceID}, surfaceID)
+				if err != nil {
+					return nil, backend.Errorf("transcript_error", err.Error())
+				}
+			}
+		}
+	}
+
+	req := transcripts.Request{
+		SurfaceID:        surfaceID,
+		ResumeBinding:    resumeBinding,
+		MaxMessages:      transcripts.MaxMessages(params),
+		KnownFingerprint: transcripts.KnownFingerprint(params),
+	}
+
+	// No session id from cmux — either no binding at all (Claude, or an
+	// installed opencode hook, would have given one) or the bridge's own
+	// tty-derived {kind: "opencode"} label from annotateSurfaces. Either way
+	// the surface's tty, title and cwd are what identify the conversation.
+	if checkpointID, _ := resumeBinding["checkpoint_id"].(string); checkpointID == "" {
+		if terminal == nil {
+			terminal = b.terminal(surfaceID)
+		}
+		if terminal != nil {
+			req.TTY = stringField(terminal, "tty")
+			req.SurfaceTitle = stringField(terminal, "surface_title")
+			req.Directory = stringField(terminal, "current_directory")
+			if req.Directory == "" {
+				req.Directory = stringField(terminal, "requested_working_directory")
+			}
+		}
+	}
+
+	res, err := b.dispatcher.Render(req)
+	if err != nil {
+		return nil, backend.Errorf("transcript_error", err.Error())
+	}
+	return transcripts.Encode(res), nil
+}
+
+// annotateSurfaces labels each surface that cmux reports with no
+// resume_binding, but whose tty has a real opencode process on it, with
+// {kind: "opencode"} so the phone treats it like any other agent surface
+// (conversation on the card, history reader). cmux binds only Claude Code by
+// itself — opencode only with its opt-in hooks — so without this a plain
+// opencode surface looks like a shell to the phone even though the transcript
+// path can already read it. WHICH session is left to the transcript path
+// (title + cwd); the label carries no checkpoint_id. Never fatal: any parse
+// failure returns the reply untouched.
+func annotateSurfaces(raw json.RawMessage, terminal func(string) map[string]any, runsOpencode func(string) bool) json.RawMessage {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
+	}
+	surfaces, _ := payload["surfaces"].([]any)
+	changed := false
+	for _, item := range surfaces {
+		surface, _ := item.(map[string]any)
+		if surface == nil {
+			continue
+		}
+		if binding, _ := surface["resume_binding"].(map[string]any); binding != nil {
+			if kind, _ := binding["kind"].(string); kind != "" {
+				continue
+			}
+		}
+		id, _ := surface["id"].(string)
+		t := terminal(id)
+		if t == nil || !runsOpencode(stringField(t, "tty")) {
+			continue
+		}
+		surface["resume_binding"] = map[string]any{"kind": "opencode", "source": "bridge-tty"}
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// surfaceBinding fetches one surface's resume_binding from a surface.list
+// call, reporting whether the surface was in the reply at all — an absent
+// surface and a surface with no binding are different answers.
+func (b *Backend) surfaceBinding(listParams map[string]any, surfaceID string) (map[string]any, bool, error) {
+	listResult, err := b.client.Send("surface.list", listParams)
+	if err != nil {
+		return nil, false, err
+	}
 	var listPayload struct {
 		Surfaces []map[string]any `json:"surfaces"`
 	}
 	if err := json.Unmarshal(listResult, &listPayload); err != nil {
-		return nil, backend.Errorf("transcript_error", "parse surface.list: "+err.Error())
+		return nil, false, err
 	}
-
-	var resumeBinding map[string]any
 	for _, s := range listPayload.Surfaces {
 		if id, _ := s["id"].(string); id == surfaceID {
-			resumeBinding, _ = s["resume_binding"].(map[string]any)
-			break
+			binding, _ := s["resume_binding"].(map[string]any)
+			return binding, true, nil
 		}
 	}
+	return nil, false, nil
+}
 
-	res, err := b.resolver.Render(claude.Request{
-		SurfaceID:        surfaceID,
-		ResumeBinding:    resumeBinding,
-		MaxMessages:      MaxMessages(params),
-		KnownFingerprint: KnownFingerprint(params),
-	})
+// terminalsCacheTTL bounds how often cmux is asked for its terminal table. The
+// focused surface polls every few seconds and the table is large (every field
+// cmux knows about every surface); which agent runs where changes far more
+// slowly than that.
+const terminalsCacheTTL = 2 * time.Second
+
+// terminal returns cmux's terminal-table entry for a surface, which is the
+// only place a surface's tty and raw title are exposed. Never fatal: a cmux
+// build without debug.terminals just means opencode surfaces with no
+// resume_binding go unidentified, same as before this existed.
+func (b *Backend) terminal(surfaceID string) map[string]any {
+	for _, t := range b.terminalTable() {
+		if id, _ := t["surface_id"].(string); id == surfaceID {
+			return t
+		}
+	}
+	return nil
+}
+
+func (b *Backend) terminalTable() []map[string]any {
+	b.termMu.Lock()
+	defer b.termMu.Unlock()
+	if time.Since(b.terminalsAt) < terminalsCacheTTL {
+		return b.terminals
+	}
+	b.terminalsAt = time.Now()
+	result, err := b.client.Send("debug.terminals", map[string]any{})
 	if err != nil {
-		return nil, backend.Errorf("transcript_error", err.Error())
+		b.terminals = nil
+		return nil
 	}
-	return TranscriptResult(res), nil
-}
-
-// MaxMessages reads and bounds the client-supplied message limit.
-func MaxMessages(params map[string]any) int {
-	maxMessages := 200
-	if v, ok := params["max_messages"].(float64); ok && v > 0 {
-		maxMessages = int(v)
-		if maxMessages > 2000 {
-			maxMessages = 2000 // bound client-supplied work
-		}
+	var payload struct {
+		Terminals []map[string]any `json:"terminals"`
 	}
-	return maxMessages
+	if err := json.Unmarshal(result, &payload); err != nil {
+		b.terminals = nil
+		return nil
+	}
+	b.terminals = payload.Terminals
+	return b.terminals
 }
 
-// KnownFingerprint reads the fingerprint the client already holds.
-func KnownFingerprint(params map[string]any) string {
-	s, _ := params["known_fingerprint"].(string)
-	return s
-}
-
-// TranscriptResult encodes a resolver result in the wire shape shared by every
-// backend's transcript command.
-func TranscriptResult(res claude.Result) json.RawMessage {
-	result, _ := json.Marshal(map[string]any{
-		"supported":       res.Supported,
-		"text":            res.Text,
-		"session_id":      res.SessionID,
-		"session_missing": res.SessionMissing,
-		// Hand back on the next poll as known_fingerprint: an unchanged
-		// transcript then answers without re-reading or re-sending it.
-		"fingerprint": res.Fingerprint,
-		"unchanged":   res.Unchanged,
-		"source":      res.Source,
-	})
-	return result
+func stringField(row map[string]any, key string) string {
+	if v, ok := row[key].(string); ok {
+		return v
+	}
+	return ""
 }

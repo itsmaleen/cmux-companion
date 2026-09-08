@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>cmux</string>
+	<string>merry</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,17 +32,17 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Used to scan the QR code displayed by cmux-bridge for pairing.</string>
+	<string>Used to scan the pairing QR code shown by the bridge on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Used to discover and connect to cmux-bridge running on your Mac over the local network.</string>
+	<string>Used to discover and connect to the bridge running on your Mac over the local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_cmux-bridge._tcp</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Used for voice input to send text to cmux surfaces.</string>
+	<string>Used for voice input to send text to your terminal sessions.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Used to transcribe your voice and send it as text to cmux.</string>
+	<string>Used to transcribe your voice and send it as text.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

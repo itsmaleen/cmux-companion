@@ -15,13 +15,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
-	"github.com/itsmaleen/cmux-companion/bridge/internal/claude"
+	"github.com/itsmaleen/cmux-companion/bridge/internal/transcripts"
 )
 
 // Config selects the herdr socket.
@@ -32,11 +33,11 @@ type Config struct {
 
 // Backend implements backend.Backend over herdr's socket API.
 type Backend struct {
-	cfg       Config
-	client    *client
-	hub       *backend.Hub
-	resolver  *claude.Resolver
-	connected atomic.Bool
+	cfg        Config
+	client     *client
+	hub        *backend.Hub
+	dispatcher *transcripts.Dispatcher
+	connected  atomic.Bool
 
 	mu         sync.Mutex
 	panes      map[string]paneInfo // by pane_id, from the snapshot + pane events
@@ -50,6 +51,21 @@ type Backend struct {
 	// agent-status subscription. Tests swap them for canned streams.
 	dial       func(ctx context.Context) (subscription, error)
 	dialStatus func(ctx context.Context, paneID string) (subscription, error)
+	// observeCmd builds the `herdr terminal session observe` subprocess for a
+	// frame stream. Tests swap it for a small script printing canned NDJSON.
+	observeCmd func(ctx context.Context, paneID string, cols, rows int) *exec.Cmd
+	// frameBackpressureTimeout and finalFrameEventTimeout override the
+	// defaults in frames.go when non-zero; tests shrink them rather than
+	// waiting out the real durations.
+	frameBackpressureTimeout time.Duration
+	finalFrameEventTimeout   time.Duration
+	// controlCmd builds the `herdr terminal session control` subprocess for a
+	// Fit. Tests swap it for a small script printing canned NDJSON, exactly
+	// like observeCmd.
+	controlCmd func(ctx context.Context, paneID string, cols, rows int) *exec.Cmd
+	// fitEstablishTimeout overrides defaultFitEstablishTimeout in fit.go when
+	// non-zero; tests shrink it rather than waiting out the real duration.
+	fitEstablishTimeout time.Duration
 }
 
 // New builds a herdr backend. It does not connect; Run does.
@@ -61,7 +77,7 @@ func New(cfg Config) *Backend {
 		cfg:        cfg,
 		client:     &client{socketPath: cfg.SocketPath, timeout: 10 * time.Second},
 		hub:        backend.NewHub(),
-		resolver:   claude.NewResolver(),
+		dispatcher: transcripts.New(),
 		panes:      map[string]paneInfo{},
 		lastStatus: map[string]string{},
 		statusSubs: map[string]context.CancelFunc{},
@@ -69,6 +85,8 @@ func New(cfg Config) *Backend {
 	}
 	b.dial = b.dialSubscription
 	b.dialStatus = b.dialStatusSubscription
+	b.observeCmd = b.buildObserveCmd
+	b.controlCmd = b.buildControlCmd
 	return b
 }
 
@@ -79,6 +97,8 @@ func (b *Backend) Info() backend.Info {
 			Browser:       false,
 			AgentStatus:   true,
 			Notifications: "push",
+			Frames:        true,
+			Screen:        true,
 		},
 	}
 }

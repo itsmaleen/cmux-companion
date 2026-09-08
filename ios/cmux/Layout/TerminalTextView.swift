@@ -45,6 +45,12 @@ struct TerminalTextView: UIViewRepresentable {
     /// Reports whether the view is pinned to the bottom, so the parent can offer
     /// a jump-to-bottom affordance only when it would do something.
     var onAtBottomChanged: ((Bool) -> Void)? = nil
+    /// A surface's live screen, already rendered (see ScreenModel), shown
+    /// below `text` (the history) behind a divider. `liveVersion` is what
+    /// identifies it: the attributed string is compared by version, never by
+    /// content, so a card re-evaluating without a new update rebuilds nothing.
+    var liveScreen: NSAttributedString? = nil
+    var liveVersion: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -139,6 +145,9 @@ struct TerminalTextView: UIViewRepresentable {
         /// a freshly built string never equals what's on screen, and SwiftUI
         /// calls updateUIView far more often than the text changes.
         private var applied: TerminalTextSnapshot?
+        /// The live screen's range in the text view's storage after the last
+        /// apply, so the next live-only update edits that range in place.
+        private var appliedLiveRange: NSRange?
         /// The snapshot most recently handed to the background builder, so a
         /// re-render of the parent view doesn't queue a duplicate build.
         private var pending: TerminalTextSnapshot?
@@ -170,18 +179,48 @@ struct TerminalTextView: UIViewRepresentable {
                 return
             }
 
-            // A history load prepends content above the viewport while the user
-            // is reading scrollback. Detect it (old text is a strict suffix of
-            // the new) so we can keep the same lines on screen instead of
-            // letting them jump.
+            // Decide how to re-anchor the viewport BEFORE the swap — it needs
+            // the old text, old content size, and old offset, all of which
+            // are about to be overwritten. See ScrollFollow.anchor.
             let oldText = applied?.text ?? ""
-            let isPrepend = !autoScroll && !oldText.isEmpty
-                && snapshot.text.count > oldText.count && snapshot.text.hasSuffix(oldText)
+            let viewportHeight = tv.bounds.height
             let oldHeight = tv.contentSize.height
             let oldOffset = tv.contentOffset
+            let distanceFromBottom = max(0, oldHeight - (oldOffset.y + viewportHeight))
+            let anchor = ScrollFollow.anchor(autoScroll: autoScroll, oldText: oldText, newText: snapshot.text)
+
+            // A live-screen update with unchanged history edits only the live
+            // range in place. Replacing the whole attributed text several
+            // times a second re-laid out thousands of history lines each time
+            // and blinked visibly on a device; the history above the live
+            // screen does not move, so the viewport keeps its offset.
+            if let previous = applied, let previousRange = appliedLiveRange, let newRange = built.liveRange,
+               previous.historyKey == snapshot.historyKey,
+               previousRange.location + previousRange.length <= tv.textStorage.length {
+                let live = attr.attributedSubstring(from: newRange)
+                tv.textStorage.beginEditing()
+                tv.textStorage.replaceCharacters(in: previousRange, with: live)
+                tv.textStorage.endEditing()
+                appliedLiveRange = NSRange(location: previousRange.location, length: live.length)
+                applied = snapshot
+                if autoScroll {
+                    scrollToBottom(tv)
+                } else {
+                    programmatically {
+                        tv.layoutIfNeeded()
+                        let maxOffsetY = max(0, tv.contentSize.height - viewportHeight)
+                        let clampedY = min(oldOffset.y, maxOffsetY)
+                        if abs(tv.contentOffset.y - clampedY) > 0.5 {
+                            tv.setContentOffset(CGPoint(x: oldOffset.x, y: clampedY), animated: false)
+                        }
+                    }
+                }
+                return
+            }
 
             tv.attributedText = attr
             applied = snapshot
+            appliedLiveRange = built.liveRange
 
             if reportedMatchCount != built.matches.count {
                 reportedMatchCount = built.matches.count
@@ -202,9 +241,25 @@ struct TerminalTextView: UIViewRepresentable {
                 return
             }
 
-            if autoScroll {
+            switch anchor {
+            case .followBottom:
                 scrollToBottom(tv)
-            } else if isPrepend {
+
+            case .keepOffset:
+                // Layout synchronously, then re-set the same raw offset,
+                // clamped to the (possibly shorter) new content — an append
+                // below the viewport, or an unchanged text, moves nothing
+                // above it.
+                programmatically {
+                    tv.layoutIfNeeded()
+                    let maxOffsetY = max(0, tv.contentSize.height - viewportHeight)
+                    let clampedY = min(oldOffset.y, maxOffsetY)
+                    if abs(tv.contentOffset.y - clampedY) > 0.5 {
+                        tv.setContentOffset(CGPoint(x: oldOffset.x, y: clampedY), animated: false)
+                    }
+                }
+
+            case .shiftByAddedHeight:
                 // Layout synchronously so contentSize reflects the prepended
                 // text, then shift the offset by exactly the added height — the
                 // viewport stays anchored on the text the user was reading.
@@ -214,6 +269,19 @@ struct TerminalTextView: UIViewRepresentable {
                     if delta > 0 {
                         tv.setContentOffset(CGPoint(x: oldOffset.x, y: oldOffset.y + delta), animated: false)
                     }
+                }
+
+            case .keepDistanceFromBottom:
+                // A replace (full-screen repaint, or the card composition
+                // itself changing) — neither the old offset nor an
+                // added-height delta means anything against the new content,
+                // but preserving how far the reader had scrolled up from the
+                // end does.
+                programmatically {
+                    tv.layoutIfNeeded()
+                    let newHeight = tv.contentSize.height
+                    let target = max(0, newHeight - viewportHeight - distanceFromBottom)
+                    tv.setContentOffset(CGPoint(x: oldOffset.x, y: target), animated: false)
                 }
             }
         }
@@ -301,13 +369,26 @@ struct TerminalTextView: UIViewRepresentable {
 
 /// The inputs that determine a rendered attributed string, captured as a value
 /// so the background builder works from an immutable copy.
-private struct TerminalTextSnapshot: Equatable {
+struct TerminalTextSnapshot: Equatable {
     let text: String
     let fontSize: CGFloat
     let textOpacity: Double
     let trimMarkdownLinks: Bool
     let searchQuery: String
     let currentMatchIndex: Int
+    let liveScreen: NSAttributedString?
+    let liveVersion: Int
+
+    init(text: String, fontSize: CGFloat, textOpacity: Double, trimMarkdownLinks: Bool = false, searchQuery: String = "", currentMatchIndex: Int = 0, liveScreen: NSAttributedString? = nil, liveVersion: Int = 0) {
+        self.text = text
+        self.fontSize = fontSize
+        self.textOpacity = textOpacity
+        self.trimMarkdownLinks = trimMarkdownLinks
+        self.searchQuery = searchQuery
+        self.currentMatchIndex = currentMatchIndex
+        self.liveScreen = liveScreen
+        self.liveVersion = liveVersion
+    }
 
     init(_ view: TerminalTextView) {
         text = view.text
@@ -316,19 +397,38 @@ private struct TerminalTextSnapshot: Equatable {
         trimMarkdownLinks = view.trimMarkdownLinks
         searchQuery = view.searchQuery
         currentMatchIndex = view.currentMatchIndex
+        liveScreen = view.liveScreen
+        liveVersion = view.liveVersion
+    }
+
+    /// The history-only part of this snapshot: the key the expensive build
+    /// (attributed history + link detection + search) is cached under.
+    var historyKey: TerminalTextSnapshot {
+        TerminalTextSnapshot(text: text, fontSize: fontSize, textOpacity: textOpacity, trimMarkdownLinks: trimMarkdownLinks, searchQuery: searchQuery, currentMatchIndex: currentMatchIndex)
+    }
+
+    static func == (a: TerminalTextSnapshot, b: TerminalTextSnapshot) -> Bool {
+        a.text == b.text && a.fontSize == b.fontSize && a.textOpacity == b.textOpacity
+            && a.trimMarkdownLinks == b.trimMarkdownLinks && a.searchQuery == b.searchQuery
+            && a.currentMatchIndex == b.currentMatchIndex
+            && (a.liveScreen == nil) == (b.liveScreen == nil) && a.liveVersion == b.liveVersion
+            && a.liveScreen?.length == b.liveScreen?.length
     }
 }
 
 /// Builds TerminalTextView's attributed string. A standalone enum (not a member
 /// of the View type) so its statics carry no MainActor isolation and can run in
 /// a detached task.
-private enum TerminalTextRenderer {
+enum TerminalTextRenderer {
     /// A rendered string plus where the active search matched it, so the
     /// coordinator can scroll to the current match and report the count without
     /// searching the text a second time on the main actor.
     struct Built {
         let attributed: NSAttributedString
         let matches: [NSRange]
+        /// Where the live screen sits inside `attributed`, when there is one,
+        /// so a later update can replace just that range.
+        var liveRange: NSRange? = nil
     }
 
     /// Every match gets this wash; the current one gets `currentMatchColor` so
@@ -336,7 +436,57 @@ private enum TerminalTextRenderer {
     private static let matchColor = UIColor.systemYellow.withAlphaComponent(0.28)
     private static let currentMatchColor = UIColor.systemYellow.withAlphaComponent(0.85)
 
+    /// Divider between the history and a live screen below it.
+    static let liveScreenDivider = "──────────  live screen  ──────────"
+
+    /// The last few history builds, keyed by everything but the live screen.
+    /// A live update arrives several times a second; without this, each one
+    /// would redo link detection and search over thousands of history lines.
+    private static let historyCache = HistoryBuildCache()
+
+    final class HistoryBuildCache {
+        private let lock = NSLock()
+        private var entries: [(key: TerminalTextSnapshot, built: Built)] = []
+        private let capacity = 6
+
+        func lookup(_ key: TerminalTextSnapshot) -> Built? {
+            lock.lock(); defer { lock.unlock() }
+            return entries.first(where: { $0.key == key })?.built
+        }
+
+        func store(_ key: TerminalTextSnapshot, _ built: Built) {
+            lock.lock(); defer { lock.unlock() }
+            entries.removeAll(where: { $0.key == key })
+            entries.append((key, built))
+            if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
+        }
+    }
+
     static func build(_ snapshot: TerminalTextSnapshot) -> Built {
+        let key = snapshot.historyKey
+        let history = historyCache.lookup(key) ?? {
+            let built = buildHistory(key)
+            historyCache.store(key, built)
+            return built
+        }()
+        guard let live = snapshot.liveScreen else { return history }
+        let attr = NSMutableAttributedString(attributedString: history.attributed)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 1
+        let dividerFont = UIFont.monospacedSystemFont(ofSize: snapshot.fontSize, weight: .regular)
+        if attr.length > 0 {
+            attr.append(NSAttributedString(string: "\n\n" + liveScreenDivider + "\n\n", attributes: [
+                .font: dividerFont,
+                .foregroundColor: UIColor.white.withAlphaComponent(0.35),
+                .paragraphStyle: style,
+            ]))
+        }
+        let liveRange = NSRange(location: attr.length, length: live.length)
+        attr.append(live)
+        return Built(attributed: attr, matches: history.matches, liveRange: liveRange)
+    }
+
+    private static func buildHistory(_ snapshot: TerminalTextSnapshot) -> Built {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 1
         let attr = NSMutableAttributedString(

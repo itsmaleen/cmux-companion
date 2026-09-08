@@ -9,8 +9,16 @@ final class AppState: ObservableObject {
     @Published var notifications: [BridgeNotification] = []
     @Published var workspaces: [Workspace] = []
     @Published var currentWorkspaceID: String?
-    @Published var surfaces: [Surface] = []
-    @Published var panes: [Pane] = []
+    // `focusedSurfaceID` (what the layout shows) is derived from these plus
+    // localFocusedSurfaceID, so the live frame stream follows every change to
+    // them — a workspace switch, for instance, only learns its focused
+    // surface once pane.list answers, well after focusSurface ran.
+    @Published var surfaces: [Surface] = [] {
+        didSet { reconcileFrameSubscription() }
+    }
+    @Published var panes: [Pane] = [] {
+        didSet { reconcileFrameSubscription() }
+    }
     @Published var isPairingPresented = false
     // Paired bridges (Macs) and which one is currently active. Persisted in the
     // Keychain via BridgeStore; a single phone can hold several and switch.
@@ -18,7 +26,9 @@ final class AppState: ObservableObject {
     @Published var selectedBridgeID: UUID?
     // Tracks the last surface explicitly focused by the user; used when surface.list
     // doesn't return is_focused and pane.list is unavailable.
-    @Published private(set) var localFocusedSurfaceID: String?
+    @Published private(set) var localFocusedSurfaceID: String? {
+        didSet { reconcileFrameSubscription() }
+    }
     @Published var surfaceContent: [String: String] = [:]
     // Surfaces whose screen moved on their most recent read_text poll. TUIs
     // repaint continuously while an agent/command runs and go static when
@@ -65,6 +75,47 @@ final class AppState: ObservableObject {
     // Which sidebar tab is showing. Owned here (not in MainTabView) so a tapped
     // notification can bring the relevant surface into view on the Layout tab.
     @Published var selectedTab: SidebarTab = .layout
+
+    // MARK: - Live terminal frames
+    //
+    // Only the FOCUSED surface streams frames; the secondary strip keeps the
+    // polled text. A feed is high-frequency (sub-second deltas), so its
+    // payloads never go through @Published — only the existence of a
+    // surface's ScreenModel does, which is all a card needs to decide whether to
+    // show the live screen or fall back to polled text.
+
+    /// One live screen per surface currently streaming (the focused surface,
+    /// once its subscribe succeeds). Only the dictionary's KEYS are meaningful
+    /// to SwiftUI; a card checks `screenModels[id] != nil` to switch modes and
+    /// then observes the ScreenModel itself, which publishes a version bump
+    /// per update — updates never go through this dictionary.
+    @Published private(set) var screenModels: [String: ScreenModel] = [:]
+    /// Surfaces whose backend answered `unsupported` to
+    /// `surface.frames.subscribe` — not re-probed on every focus.
+    @Published private(set) var framesUnsupported: Set<String> = []
+    /// Surfaces whose real pane is currently resized to the phone's grid
+    /// ("fit to phone"), with that grid. herdr only; released when focus
+    /// moves away, on disconnect, or when the bridge reports the fit ended.
+    @Published private(set) var fittedSurfaces: [String: FitGrid] = [:]
+    /// The last size each surface's live card reported, so a fit can be
+    /// computed (and re-computed after a rotation) without asking the view.
+    private var liveCardSizes: [String: CGSize] = [:]
+    /// Surfaces with a `surface.frames.subscribe` in flight or acknowledged.
+    /// Distinct from `screenModels`'s keys only during the brief window between
+    /// sending the subscribe and its response landing.
+    private var framesSubscribed: Set<String> = []
+    /// The surface frames are (or should be) streaming for — the target
+    /// `updateFrameSubscription` reconciles `framesSubscribed`/`screenModels`
+    /// against. Tracked separately from `focusedSurfaceID` (a computed
+    /// property derived from panes/surfaces) so an in-flight subscribe can
+    /// tell whether focus moved on while it was outstanding.
+    private var frameFocusedSurfaceID: String?
+
+    /// True for the in-memory session seeded by `-UITestFixture frames` (see
+    /// `seedFixtureState`). Lets views skip work that only makes sense with a
+    /// real bridge/device — e.g. requesting microphone permission, which
+    /// would otherwise cover every screenshot with a system alert.
+    private(set) var isFixtureMode = false
 
     // The live instance, so AppDelegate can route a tapped notification to it.
     // Weak so it doesn't keep a torn-down state alive.
@@ -146,6 +197,16 @@ final class AppState: ObservableObject {
     private var discovery: BridgeDiscovery?
 
     init() {
+        // Screenshot fixture mode: `-UITestFixture frames` seeds a fully
+        // in-memory session (no bridge, no keychain/pairing store touched) so
+        // ios/scripts/screenshots.sh can capture the live-frame card without a
+        // Mac. Argument-gated only — there's no way to reach this from normal
+        // app use.
+        if Self.launchArgument("-UITestFixture") == "frames" {
+            seedFixtureState(focusedSurfaceID: Self.launchArgument("-UITestFocus"))
+            Self.current = self
+            return
+        }
         let loaded = bridgeStore.loadAll()
         bridges = loaded.bridges
         selectedBridgeID = loaded.selectedID ?? loaded.bridges.first?.id
@@ -157,6 +218,111 @@ final class AppState: ObservableObject {
             Self.pendingLaunchTap = nil
             navigateToSurface(surfaceID: tap.surfaceID, workspaceID: tap.workspaceID)
         }
+    }
+
+    /// Reads a `-flag value` pair from the process's launch arguments, the
+    /// way `xcrun simctl launch <bundle> -UITestFixture frames` passes them.
+    /// Checked directly against `ProcessInfo.arguments` rather than through
+    /// `UserDefaults`'s argument-domain registration so fixture mode can't be
+    /// tripped by a stale default surviving between launches.
+    private static func launchArgument(_ flag: String) -> String? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
+        return args[index + 1]
+    }
+
+    /// Seeds a self-contained session for screenshot fixture mode: one shell
+    /// surface and one claude surface, a fake conversation, and their live
+    /// frame feeds loaded from the bundled `Fixtures/frames-*.ndjson` files.
+    /// No bridge is created and the keychain-backed BridgeStore is never
+    /// touched.
+    private func seedFixtureState(focusedSurfaceID: String?) {
+        isFixtureMode = true
+        let shellID = "herdr:w2:p7"
+        let claudeID = "herdr:w1:p1"
+        let workspaceID = "fixture"
+
+        // ContentView shows PairingView whenever `bridges` is empty,
+        // regardless of `connectionStatus` — this in-memory-only bridge (never
+        // passed to `bridgeStore.persist`, so the keychain is never touched)
+        // is just enough to satisfy that check and reach MainTabView.
+        let fixtureBridge = SavedBridge(
+            name: "fixture",
+            credentials: PairingCredentials(host: "fixture", port: 0, token: "fixture")
+        )
+        bridges = [fixtureBridge]
+        selectedBridgeID = fixtureBridge.id
+
+        connectionStatus = .connected
+        backendKind = "herdr"
+        capabilities = BackendCapabilities(browser: false, agentStatus: true, notifications: "polled")
+        let workspaceDict: [String: Any] = ["id": workspaceID, "title": "fixture"]
+        workspaces = [Workspace(workspaceDict)].compactMap { $0 }
+        currentWorkspaceID = workspaceID
+        let shellDict: [String: Any] = [
+            "id": shellID, "type": "terminal", "title": "~/interview-prep",
+            "workspace_id": workspaceID, "is_focused": false
+        ]
+        let claudeDict: [String: Any] = [
+            "id": claudeID, "type": "terminal", "title": "Herdr companion app integration",
+            "workspace_id": workspaceID, "is_focused": false,
+            "resume_binding": ["kind": "claude"] as [String: Any]
+        ]
+        surfaces = [Surface(shellDict), Surface(claudeDict)].compactMap { $0 }
+
+        claudeTranscript[claudeID] = Self.fixtureClaudeTranscript
+        recomposeClaudeCard(claudeID)
+        // The shell surface has no transcript fallback, so its SECONDARY
+        // (non-focused) tile — which shows polled text, not the live frame
+        // feed — would otherwise sit on the perpetual "Loading…" state.
+        surfaceContent[shellID] = "$ bun test\n11 pass, 0 fail"
+
+        let focusID = focusedSurfaceID ?? claudeID
+        localFocusedSurfaceID = focusID
+        frameFocusedSurfaceID = focusID
+
+        loadFixtureScreen(surfaceID: shellID, resourceName: "screen-shell")
+        loadFixtureScreen(surfaceID: claudeID, resourceName: "screen-claude")
+    }
+
+    /// A short fake conversation for the fixture claude surface's card.
+    private static let fixtureClaudeTranscript = """
+    ▌ You
+    Can you wire the herdr companion app integration into the iOS layout?
+
+    ▌ Claude
+    Looked at WorkspaceLayoutView and PaneCardView — the focused-card path is
+    the one that needs the new live view; the strip can keep polling text.
+
+    ▌ You
+    Sounds right. Keep the fallback for surfaces without frame support.
+
+    ▌ Claude
+    Doing that now — an `unsupported` subscribe error just drops the surface
+    back to the plain text card, no visible error state.
+
+    ▌ You
+    Good. Ping me once the screenshots look right.
+
+    ▌ Claude
+    Working on it — building the fixture pane now.
+    """
+
+    /// Loads one bundled `Fixtures/<resourceName>.json` file — a recorded
+    /// `surface.screen` full update — into a fresh ScreenModel for
+    /// `surfaceID`. A missing/unparsable resource just leaves that surface
+    /// without a model — its card falls back to plain text, same as a real
+    /// `unsupported` surface would.
+    private func loadFixtureScreen(surfaceID: String, resourceName: String) {
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "json", subdirectory: "Fixtures")
+            ?? Bundle.main.url(forResource: resourceName, withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let update = try? JSONDecoder().decode(ScreenUpdate.self, from: data) else {
+            return
+        }
+        let model = ScreenModel()
+        model.apply(update)
+        screenModels[surfaceID] = model
     }
 
     // MARK: - Notification navigation
@@ -449,6 +615,11 @@ final class AppState: ObservableObject {
         attachGeneration += 1
         deferredComposedSend = nil
         lastFocusedSurface = [:]
+        screenModels = [:]
+        framesSubscribed = []
+        framesUnsupported = []
+        fittedSurfaces = [:]
+        frameFocusedSurfaceID = nil
     }
 
     // MARK: - Connection
@@ -499,10 +670,12 @@ final class AppState: ObservableObject {
         if surface?.isBrowser != true {
             readSurfaceText(id, lines: Self.focusedHistoryLines)
         }
-        // Same for a claude surface's conversation, which IS its card content.
-        if surface?.isClaudeAgent == true {
+        // Same for a claude/opencode surface's conversation, which IS its card
+        // content.
+        if surface?.hasTranscript == true {
             loadClaudeTranscript(id)
         }
+        updateFrameSubscription(focusedSurfaceID: id)
         send(method: "surface.focus", params: ["surface_id": id]) { [weak self] _ in
             self?.refreshSurfaces()
             self?.refreshPanes()
@@ -659,6 +832,232 @@ final class AppState: ObservableObject {
     /// stalls the socket or an attributed string UITextView can't lay out.
     static let focusedHistoryLines = 1500
 
+    // MARK: - Live terminal frames
+
+    /// Reconciles which surface should be streaming frames with `newFocus`.
+    /// Called on every focus change (explicit `focusSurface`, and the
+    /// auto-select paths in `refreshSurfaces`/`refreshSurfacesAndFocusNew`).
+    /// A no-op when focus didn't actually move, so re-running the auto-select
+    /// branches on an unrelated refresh doesn't tear down and re-subscribe a
+    /// feed that's already correct.
+    /// Points the frame stream at whatever surface the layout currently
+    /// shows. Cheap when nothing changed; called from the property observers
+    /// on surfaces/panes/localFocusedSurfaceID so no code path that moves
+    /// focus can leave the stream on the previous surface.
+    private func reconcileFrameSubscription() {
+        updateFrameSubscription(focusedSurfaceID: focusedSurfaceID)
+    }
+
+    private func updateFrameSubscription(focusedSurfaceID newFocus: String?) {
+        guard frameFocusedSurfaceID != newFocus else { return }
+        if let previous = frameFocusedSurfaceID {
+            // A fit changes the pane on the Mac; it is only ever held for the
+            // surface on screen.
+            releaseFit(previous)
+            unsubscribeFrames(previous)
+        }
+        frameFocusedSurfaceID = newFocus
+        guard let surfaceID = newFocus else { return }
+        subscribeFrames(for: surfaceID)
+    }
+
+    /// Sends `surface.frames.subscribe` for `surfaceID` and, on success,
+    /// creates its ScreenModel. A backend that answers `unsupported` is
+    /// remembered in `framesUnsupported` so later focuses don't re-probe it;
+    /// any other failure (not_found, frames_error, a dropped connection) just
+    /// leaves the surface without a feed — its card falls back to text.
+    private func subscribeFrames(for surfaceID: String) {
+        guard !framesUnsupported.contains(surfaceID) else { return }
+        guard !framesSubscribed.contains(surfaceID) else { return }
+        guard connectionStatus.isConnected else { return }
+        framesSubscribed.insert(surfaceID)
+        var params: [String: Any] = ["surface_id": surfaceID]
+        if let grid = fittedSurfaces[surfaceID] {
+            // Observe at the fitted grid, not the layout's: herdr's observer
+            // crops/pads to whatever size it is asked for.
+            params["cols"] = grid.columns
+            params["rows"] = grid.rows
+        }
+        sendRaw(method: "surface.screen.subscribe", params: params) { [weak self] response in
+            guard let self else { return }
+            // Focus moved on while this was in flight — undo it rather than
+            // stream frames for a surface that's no longer on screen.
+            guard self.frameFocusedSurfaceID == surfaceID else {
+                self.framesSubscribed.remove(surfaceID)
+                if response.ok {
+                    self.sendRaw(method: "surface.screen.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
+                }
+                return
+            }
+            guard response.ok else {
+                self.framesSubscribed.remove(surfaceID)
+                if response.error?.code == "unsupported" {
+                    self.framesUnsupported.insert(surfaceID)
+                }
+                // A transient failure (not_found, a dropped request) on a
+                // restart would otherwise leave a stale ScreenModel frozen on
+                // its last frame. Drop it so the card falls back to polled text
+                // and the next focus or poll can retry.
+                self.screenModels.removeValue(forKey: surfaceID)
+                return
+            }
+            if self.screenModels[surfaceID] == nil {
+                self.screenModels[surfaceID] = self.makeScreenModel(for: surfaceID)
+            }
+        }
+    }
+
+    /// A feed whose resync request restarts the surface's stream.
+    private func makeScreenModel(for surfaceID: String) -> ScreenModel {
+        let model = ScreenModel()
+        model.onResyncNeeded = { [weak self] in self?.resyncFrames(surfaceID) }
+        return model
+    }
+
+    /// Restarts a live stream so the bridge sends a fresh full frame — the
+    /// phone's view can no longer reconstruct the screen from what it kept
+    /// (see ScreenModel.onResyncNeeded). A resubscribe of an already-subscribed
+    /// surface restarts the stream on the bridge; the feed itself is kept so
+    /// the card doesn't flicker back to text.
+    private func resyncFrames(_ surfaceID: String) {
+        guard surfaceID == frameFocusedSurfaceID, framesSubscribed.contains(surfaceID) else { return }
+        framesSubscribed.remove(surfaceID)
+        subscribeFrames(for: surfaceID)
+    }
+
+    // MARK: Fit to phone
+
+    /// The point size a fitted pane is sized for: the same size the polled
+    /// text card uses, readable without pinching.
+    private static let fitFontSize: CGFloat = 9
+
+    /// Records the live card's size for `surfaceID`; while the surface is
+    /// fitted, a size change (rotation, keyboard) re-fits it.
+    func reportLiveCardSize(_ surfaceID: String, _ size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        guard liveCardSizes[surfaceID] != size else { return }
+        liveCardSizes[surfaceID] = size
+        if fittedSurfaces[surfaceID] != nil {
+            let grid = fitGrid(for: size)
+            if fittedSurfaces[surfaceID] != grid {
+                sendFit(surfaceID, grid)
+            }
+        }
+    }
+
+    /// "Fit to phone": resize the surface's real pane on the Mac to the grid
+    /// that fills its card here, so a full-screen TUI lays itself out for the
+    /// phone (opencode drops its sidebar, Claude Code wraps to the width).
+    /// Toggles: a fitted surface is released back to its layout's size.
+    func toggleFitToPhone(_ surfaceID: String) {
+        if fittedSurfaces[surfaceID] != nil {
+            releaseFit(surfaceID)
+            return
+        }
+        guard let size = liveCardSizes[surfaceID] else { return }
+        sendFit(surfaceID, fitGrid(for: size))
+    }
+
+    private func fitGrid(for size: CGSize) -> FitGrid {
+        let cell = LiveCellMetrics.cell(fontSize: Self.fitFontSize)
+        let grid = FrameFit.gridToFit(size: size, cellWidth: cell.width, cellHeight: cell.height)
+        return FitGrid(columns: grid.columns, rows: grid.rows)
+    }
+
+    private func sendFit(_ surfaceID: String, _ grid: FitGrid) {
+        guard connectionStatus.isConnected else { return }
+        sendRaw(method: "surface.fit", params: ["surface_id": surfaceID, "cols": grid.columns, "rows": grid.rows]) { [weak self] response in
+            guard let self else { return }
+            guard response.ok else {
+                if let code = response.error?.code, code != "unsupported" {
+                    print("surface.fit failed: \(code) \(response.error?.message ?? "")")
+                }
+                return
+            }
+            // Focus may have moved while the fit was in flight. A fit resizes
+            // the real pane on the Mac, so it is only ever held for the surface
+            // on screen — record it and restart the stream only if this is
+            // still the focused surface; otherwise release it right back, or
+            // the Mac pane stays resized with nothing tracking it (releaseFit
+            // during the focus switch found nothing to release yet).
+            guard surfaceID == self.frameFocusedSurfaceID else {
+                self.sendRaw(method: "surface.fit.release", params: ["surface_id": surfaceID]) { _ in }
+                return
+            }
+            self.fittedSurfaces[surfaceID] = grid
+            self.restartFrames(surfaceID)
+        }
+    }
+
+    private func releaseFit(_ surfaceID: String) {
+        guard fittedSurfaces.removeValue(forKey: surfaceID) != nil else { return }
+        sendRaw(method: "surface.fit.release", params: ["surface_id": surfaceID]) { _ in }
+        restartFrames(surfaceID)
+    }
+
+    /// The bridge ended a fit on its own (herdr closed the controller); the
+    /// pane is back at its layout size, so stream it at that size again.
+    private func handleFitEnded(_ push: SurfaceFramesEndedPush) {
+        guard fittedSurfaces.removeValue(forKey: push.surfaceID) != nil else { return }
+        restartFrames(push.surfaceID)
+    }
+
+    /// Restarts the focused surface's frame stream so it picks up the pane's
+    /// new grid with a fresh full frame.
+    private func restartFrames(_ surfaceID: String) {
+        guard surfaceID == frameFocusedSurfaceID, framesSubscribed.contains(surfaceID) else { return }
+        framesSubscribed.remove(surfaceID)
+        subscribeFrames(for: surfaceID)
+    }
+
+    /// Stops streaming frames for `surfaceID` and drops its feed immediately
+    /// (rather than waiting for the bridge's ack) so the card falls back to
+    /// text the instant focus moves away.
+    private func unsubscribeFrames(_ surfaceID: String) {
+        let wasActive = framesSubscribed.remove(surfaceID) != nil || screenModels[surfaceID] != nil
+        screenModels.removeValue(forKey: surfaceID)
+        guard wasActive else { return }
+        sendRaw(method: "surface.screen.unsubscribe", params: ["surface_id": surfaceID]) { _ in }
+    }
+
+    /// A `surface.screen` push landed: apply it to the surface's model (the
+    /// card observing the model repaints). Stray updates for a surface we've
+    /// since moved focus away from are dropped.
+    private func handleScreen(_ update: ScreenUpdate) {
+        guard update.surfaceID == frameFocusedSurfaceID else { return }
+        let model = screenModels[update.surfaceID] ?? {
+            let model = makeScreenModel(for: update.surfaceID)
+            screenModels[update.surfaceID] = model
+            return model
+        }()
+        model.apply(update)
+    }
+
+    /// A `surface.frames.ended` push landed: the bridge stopped streaming.
+    /// Drops the feed so the card falls back to text right away. Unless the
+    /// reason was our own unsubscribe, and the surface is still the focused
+    /// one, resubscribes after a short delay — `backpressure` in particular
+    /// means the bridge dropped us for being slow, and a fresh subscribe
+    /// yields a new full frame to recover from.
+    private func handleFramesEnded(_ push: SurfaceFramesEndedPush) {
+        // An `unsubscribed` end is the echo of our own unsubscribe, whose
+        // state was already cleared when it was sent. A surface switch that
+        // lands back on the same surface (focus flaps between the locally
+        // tapped surface and the pane-derived one until pane.list catches up)
+        // sends unsubscribe + subscribe back to back, so this echo routinely
+        // arrives AFTER the new subscription — acting on it tore down the
+        // live feed the bridge was in fact streaming, and the card fell back
+        // to text.
+        guard push.reason != "unsubscribed" else { return }
+        framesSubscribed.remove(push.surfaceID)
+        screenModels.removeValue(forKey: push.surfaceID)
+        guard push.surfaceID == frameFocusedSurfaceID else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.frameFocusedSurfaceID == push.surfaceID else { return }
+            self.subscribeFrames(for: push.surfaceID)
+        }
+    }
+
     /// Loads a claude surface's conversation from its session transcript (via
     /// the bridge's `claude.transcript`). Claude runs as a full-screen TUI whose
     /// terminal keeps no scrollback, so this — not the terminal mirror — is the
@@ -795,7 +1194,7 @@ final class AppState: ObservableObject {
     /// shell, and a cached conversation would otherwise stay pinned above its
     /// output for the rest of the session.
     func cardText(for surface: Surface) -> String {
-        guard surface.isClaudeAgent, let text = claudeCardText[surface.id] else {
+        guard surface.hasTranscript, let text = claudeCardText[surface.id] else {
             return surfaceContent[surface.id] ?? ""
         }
         return text
@@ -1148,6 +1547,10 @@ final class AppState: ObservableObject {
                 if self?.focusedSurfaceID == nil, let first = self?.surfaces.first {
                     self?.localFocusedSurfaceID = first.id
                 }
+                // Picks up both the auto-select above and a reconnect, where
+                // `frameFocusedSurfaceID` was cleared but the previously
+                // focused surface is still the one on screen.
+                self?.updateFrameSubscription(focusedSurfaceID: self?.focusedSurfaceID)
             }
         }
     }
@@ -1181,9 +1584,10 @@ final class AppState: ObservableObject {
                 self.setIfChanged(\.surfaces, to: list.compactMap(Surface.init), by: Surface.sameContent)
                 self.applyAgentStatuses()
                 if let newSurface = self.surfaces.first(where: { !previousIDs.contains($0.id) }) {
-                    self.focusSurface(newSurface.id)
+                    self.focusSurface(newSurface.id) // also updates the frame subscription
                 } else if self.focusedSurfaceID == nil, let first = self.surfaces.first {
                     self.localFocusedSurfaceID = first.id
+                    self.updateFrameSubscription(focusedSurfaceID: first.id)
                 }
             }
         }
@@ -1265,6 +1669,26 @@ final class AppState: ObservableObject {
     ) {
         client?.send(method: method, params: params, completion: completion)
     }
+
+    /// Like `send`, but for callers that need the full response (error code
+    /// included) — currently just the frame-subscription calls.
+    private func sendRaw(
+        method: String,
+        params: [String: Any],
+        onResponse: @escaping (CommandResponse) -> Void
+    ) {
+        client?.sendCommand(method: method, params: params, onResponse: onResponse)
+    }
+}
+
+// MARK: - Live terminal frames
+
+/// One decoded `surface.frame` push: either a full repaint (reset + resize +
+/// feed) or a delta (feed as-is) for a surface's live terminal screen.
+/// A "fit to phone" grid: what the real pane was resized to.
+struct FitGrid: Equatable {
+    let columns: Int
+    let rows: Int
 }
 
 // MARK: - BridgeClientDelegate
@@ -1294,6 +1718,15 @@ extension AppState: BridgeClientDelegate {
         // for these surfaces once the bridge is back.
         claudeTranscriptInFlight.removeAll()
         claudeTranscriptLoading.removeAll()
+        // The dead socket's frame subscriptions die with it — drop feeds now
+        // so the focused card falls back to text immediately instead of
+        // freezing on the last frame, and clear `frameFocusedSurfaceID` so
+        // reconnecting resubscribes from scratch rather than treating the
+        // focused surface as already subscribed.
+        screenModels = [:]
+        framesSubscribed = []
+        fittedSurfaces = [:]
+        frameFocusedSurfaceID = nil
     }
 
     func clientDidReceiveMessage(_ client: BridgeClient, message: BridgeMessage) {
@@ -1330,6 +1763,12 @@ extension AppState: BridgeClientDelegate {
             if update.workspaceID == nil || update.workspaceID == currentWorkspaceID {
                 refreshSurfaces()
             }
+        case .surfaceScreen(let update):
+            handleScreen(update)
+        case .surfaceScreenEnded(let push):
+            handleFramesEnded(push)
+        case .surfaceFitEnded(let push):
+            handleFitEnded(push)
         case .commandResponse, .ignored:
             break
         }
@@ -1444,6 +1883,11 @@ struct Surface: Identifiable {
 
     var isBrowser: Bool { type == "browser" }
     var isClaudeAgent: Bool { agentKind == "claude" }
+    /// Whether this surface's conversation can be read via `agent.transcript`.
+    /// Claude Code and opencode are both full-screen TUIs that keep no
+    /// terminal scrollback, so their card content and history reader come
+    /// from this instead of the terminal mirror.
+    var hasTranscript: Bool { agentKind == "claude" || agentKind == "opencode" }
 
     init?(_ dict: [String: Any]) {
         guard let id = dict["id"] as? String else { return nil }

@@ -10,7 +10,7 @@ struct NotificationsView: View {
                     ContentUnavailableView(
                         "No notifications",
                         systemImage: "bell.slash",
-                        description: Text("New cmux notifications will appear here.")
+                        description: Text("New notifications will appear here.")
                     )
                 } else {
                     List(appState.notifications) { notification in

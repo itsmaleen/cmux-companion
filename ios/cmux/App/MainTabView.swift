@@ -138,7 +138,7 @@ struct MainTabView: View {
             Spacer()
 
             // Version / branding
-            Text("cmux companion")
+            Text("merry")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.2))
                 .padding(.horizontal, 16)

@@ -13,6 +13,16 @@ enum BridgeMessage {
     /// A surface's runtime-detected agent status or title changed (protocol 2,
     /// backends with the `agent_status` capability).
     case surfaceUpdated(SurfaceUpdate)
+        /// A rendered-screen update for a surface this connection subscribed to
+    /// via `surface.screen.subscribe`: only the lines that changed.
+    case surfaceScreen(ScreenUpdate)
+    /// The bridge stopped streaming screen updates for a surface (it was
+    /// unsubscribed, the surface closed, or the bridge dropped us).
+    case surfaceScreenEnded(SurfaceFramesEndedPush)
+    /// A "fit to phone" resize of a surface ended on the bridge's side (the
+    /// controller herdr gave us was closed, or errored). Same shape as
+    /// `surface.frames.ended`.
+    case surfaceFitEnded(SurfaceFramesEndedPush)
     case commandResponse(CommandResponse)
     /// A push type this client doesn't know. Ignored rather than mis-parsed, so
     /// a newer bridge can add events without an older phone reacting to them.
@@ -86,6 +96,60 @@ struct CommandError {
     let message: String
 }
 
+/// A `surface.frame` push: a full repaint or a delta of raw PTY bytes for a
+/// surface's live terminal screen. `bytes` is base64 and decoded by the
+/// caller off the main actor — see AppState.handleFrame.
+/// One styled run of a rendered screen line. `a` is a bit set: 1 bold,
+/// 2 italic, 4 underline, 8 dim, 16 inverse, 32 strikethrough.
+struct ScreenRun: Decodable, Equatable {
+    let t: String
+    let fg: String?
+    let bg: String?
+    let a: Int?
+}
+
+struct ScreenLine: Decodable {
+    let i: Int
+    let runs: [ScreenRun]
+}
+
+struct ScreenCursor: Decodable, Equatable {
+    let x: Int
+    let y: Int
+    let visible: Bool
+}
+
+/// A `surface.screen` push: the bridge's rendering of a pane. `full` carries
+/// every row; otherwise `lines` holds only the rows that changed since the
+/// previous update on the stream.
+struct ScreenUpdate: Decodable {
+    let surfaceID: String
+    let seq: Int
+    let cols: Int
+    let rows: Int
+    let full: Bool
+    let cursor: ScreenCursor?
+    let lines: [ScreenLine]
+
+    enum CodingKeys: String, CodingKey {
+        case surfaceID = "surface_id"
+        case seq, cols, rows, full, cursor, lines
+    }
+}
+
+/// A `surface.screen.ended` (or `surface.fit.ended`) push: the bridge stopped a
+/// per-surface stream. `reason` is one of "closed", "error", "backpressure", or
+/// "unsubscribed".
+struct SurfaceFramesEndedPush: Decodable {
+    let surfaceID: String
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case surfaceID = "surface_id"
+        case reason
+    }
+}
+
 // MARK: - Delegate
 
 protocol BridgeClientDelegate: AnyObject {
@@ -103,8 +167,16 @@ final class BridgeClient: NSObject {
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
     private var completions: [String: ([String: Any]) -> Void] = [:]
-    // `completions` is written from the caller (main actor) and read from the
-    // URLSession receive queue, so all access must be serialized.
+    // A second completion table for callers that need the full response —
+    // `ok` and `error.code` as well as `result` — e.g. surface.frames.subscribe
+    // distinguishing an `unsupported` backend from a transient failure. Kept
+    // separate from `completions` rather than changing its signature: most
+    // call sites only ever look at `result` and would have to unwrap a
+    // CommandResponse for nothing.
+    private var rawCompletions: [String: (CommandResponse) -> Void] = [:]
+    // `completions`/`rawCompletions` are written from the caller (main actor)
+    // and read from the URLSession receive queue, so all access must be
+    // serialized.
     private let completionsLock = NSLock()
     private var reconnectTask: Task<Void, Never>?
     private var shouldReconnect = true
@@ -159,6 +231,33 @@ final class BridgeClient: NSObject {
             // chain follow-up work (refreshSurfaces, etc.) aren't stranded.
             self.completionsLock.lock()
             self.completions.removeValue(forKey: id)
+            self.completionsLock.unlock()
+        }
+    }
+
+    /// Like `send`, but hands the caller the full response — `ok` and
+    /// `error.code` as well as `result` — for calls whose caller must
+    /// distinguish error codes (e.g. `unsupported` vs. a transient failure).
+    func sendCommand(
+        method: String,
+        params: [String: Any],
+        onResponse: @escaping (CommandResponse) -> Void
+    ) {
+        let id = UUID().uuidString
+        let payload: [String: Any] = ["id": id, "method": method, "params": params]
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8),
+              let task else { return }
+
+        completionsLock.lock()
+        rawCompletions[id] = onResponse
+        completionsLock.unlock()
+
+        task.send(.string(text)) { [weak self] error in
+            guard error != nil, let self else { return }
+            self.completionsLock.lock()
+            self.rawCompletions.removeValue(forKey: id)
             self.completionsLock.unlock()
         }
     }
@@ -231,10 +330,24 @@ final class BridgeClient: NSObject {
         if let id = json["id"] as? String {
             completionsLock.lock()
             let completion = completions.removeValue(forKey: id)
+            let rawCompletion = rawCompletions.removeValue(forKey: id)
             completionsLock.unlock()
             if let completion {
                 let result = json["result"] as? [String: Any] ?? [:]
                 Task { @MainActor in completion(result) }
+            }
+            if let rawCompletion {
+                let ok = json["ok"] as? Bool ?? false
+                let result = json["result"] as? [String: Any] ?? [:]
+                var cmdError: CommandError?
+                if let errDict = json["error"] as? [String: Any] {
+                    cmdError = CommandError(
+                        code: errDict["code"] as? String ?? "",
+                        message: errDict["message"] as? String ?? ""
+                    )
+                }
+                let response = CommandResponse(id: id, ok: ok, result: result, error: cmdError)
+                Task { @MainActor in rawCompletion(response) }
             }
         }
     }
@@ -267,6 +380,24 @@ final class BridgeClient: NSObject {
             if let updateData = try? JSONSerialization.data(withJSONObject: data),
                let update = try? JSONDecoder().decode(SurfaceUpdate.self, from: updateData) {
                 return .surfaceUpdated(update)
+            }
+            return .ignored
+        case "surface.screen":
+            if let screenData = try? JSONSerialization.data(withJSONObject: data),
+               let update = try? JSONDecoder().decode(ScreenUpdate.self, from: screenData) {
+                return .surfaceScreen(update)
+            }
+            return .ignored
+        case "surface.screen.ended":
+            if let endedData = try? JSONSerialization.data(withJSONObject: data),
+               let ended = try? JSONDecoder().decode(SurfaceFramesEndedPush.self, from: endedData) {
+                return .surfaceScreenEnded(ended)
+            }
+            return .ignored
+        case "surface.fit.ended":
+            if let endedData = try? JSONSerialization.data(withJSONObject: data),
+               let ended = try? JSONDecoder().decode(SurfaceFramesEndedPush.self, from: endedData) {
+                return .surfaceFitEnded(ended)
             }
             return .ignored
         default:
@@ -307,6 +438,7 @@ final class BridgeClient: NSObject {
         // Drop any in-flight completions; their responses will never arrive.
         // A fresh connect re-issues refreshWorkspaces/Surfaces from scratch.
         completions.removeAll()
+        rawCompletions.removeAll()
         completionsLock.unlock()
         Task { @MainActor in
             self.delegate?.clientDidDisconnect(self, error: error)

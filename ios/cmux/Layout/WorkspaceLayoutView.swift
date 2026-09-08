@@ -62,6 +62,14 @@ enum QuickActionBuilder {
             QuickAction(label: "Zoom", icon: "arrow.up.left.and.arrow.down.right", section: "Terminal") {
                 appState.togglePaneZoom(sid)
             },
+            // Resizes the real pane on the Mac to this phone's grid (herdr
+            // only) so full-screen TUIs lay out for the phone; released when
+            // focus leaves the surface. The label reflects the current state.
+            QuickAction(label: appState.fittedSurfaces[sid] != nil ? "Unfit Pane" : "Fit to Phone",
+                        icon: appState.fittedSurfaces[sid] != nil ? "iphone.slash" : "iphone",
+                        section: "Terminal") {
+                appState.toggleFitToPhone(sid)
+            },
             QuickAction(label: "Search", icon: "magnifyingglass", section: "Terminal") {
                 onOpenSearch()
             },
@@ -354,14 +362,26 @@ struct WorkspaceLayoutView: View {
             // Matches belong to the surface they were found in; carrying an
             // index across a surface switch points at nothing.
             if isSearching { closeSearch() }
+            // Fetch the newly focused surface right away. focusSurface() does
+            // this for a local tap, but focus also changes through the pane
+            // list (cmux reporting a focus change, or the brief flap while a
+            // switch settles) with no tap — and then the card sat on just the
+            // live viewport, its conversation not loading until the 3s poll.
+            // That was the "proper view only shows once the keyboard is up"
+            // bug: the keyboard press merely coincided with a poll.
+            if let focused = focusedSurface {
+                fetchContent(for: focused)
+            }
             // Clear notifications for newly focused surface after a moment
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 appState.clearNotificationsForFocusedSurface()
             }
         }
         .onAppear {
-            appState.refreshSurfaces()
-            speechManager.requestPermissions()
+            if !appState.isFixtureMode {
+                appState.refreshSurfaces()
+                speechManager.requestPermissions()
+            }
             wireVolumeCallbacks()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 if volumeButtonControls { volumeHandler.start() }
@@ -704,9 +724,15 @@ struct WorkspaceLayoutView: View {
             transcript: speechManager.transcript,
             terminalText: surface.isBrowser ? "" : appState.cardText(for: surface),
             contentScale: contentScale,
+            liveScreen: surface.isBrowser ? nil : appState.screenModels[surface.id],
+            onLiveSizeChanged: { appState.reportLiveCardSize(surface.id, $0) },
+            liveHistoryText: surface.hasTranscript
+                ? (appState.claudeTranscript[surface.id] ?? "")
+                : (appState.surfaceContent[surface.id] ?? ""),
+            liveHistoryIsPolledScreen: !surface.hasTranscript,
             isBrowser: surface.isBrowser,
             browserURL: appState.browserURLs[surface.id] ?? "",
-            canOpenHistory: surface.isClaudeAgent,
+            canOpenHistory: surface.hasTranscript,
             onOpenHistory: {
                 // Resolve the CURRENTLY focused surface at fire time rather than
                 // capturing this card's `surface`. During a cycle transition the
@@ -716,7 +742,7 @@ struct WorkspaceLayoutView: View {
                 // guarantees history always matches what's on screen.
                 let focused = appState.surfaces.first(where: { $0.id == appState.focusedSurfaceID })
                     ?? surface
-                guard focused.isClaudeAgent else { return }
+                guard focused.hasTranscript else { return }
                 appState.presentedHistory = HistoryTarget(id: focused.id, title: focused.title)
             },
             isWorking: appState.workingSurfaces.contains(surface.id),
@@ -746,6 +772,10 @@ struct WorkspaceLayoutView: View {
             DragGesture(minimumDistance: 50)
                 .onEnded { value in
                     guard !quickAction.isOpen else { return }
+                    // While the remote keyboard is up the user is typing at
+                    // THIS surface; a stray horizontal drag must not move
+                    // them to another one mid-command.
+                    guard !keyboardActive else { return }
                     // A drag that extended a text selection must not also
                     // switch surfaces.
                     guard !isTextSelectionActive else { return }
@@ -992,11 +1022,11 @@ struct WorkspaceLayoutView: View {
         let lines = surface.id == appState.focusedSurfaceID
             ? AppState.focusedHistoryLines : 50
         appState.readSurfaceText(surface.id, lines: lines)
-        // A claude surface's card is its conversation, so keep the focused
-        // one's transcript current alongside the mirror. Unchanged transcripts
-        // answer from a fingerprint, so this poll is nearly free; background
-        // surfaces load theirs when they come into focus.
-        if surface.isClaudeAgent, surface.id == appState.focusedSurfaceID {
+        // A claude/opencode surface's card is its conversation, so keep the
+        // focused one's transcript current alongside the mirror. Unchanged
+        // transcripts answer from a fingerprint, so this poll is nearly free;
+        // background surfaces load theirs when they come into focus.
+        if surface.hasTranscript, surface.id == appState.focusedSurfaceID {
             appState.loadClaudeTranscript(surface.id)
         }
     }

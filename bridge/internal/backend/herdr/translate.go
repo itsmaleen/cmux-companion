@@ -8,8 +8,7 @@ import (
 	"strings"
 
 	"github.com/itsmaleen/cmux-companion/bridge/internal/backend"
-	"github.com/itsmaleen/cmux-companion/bridge/internal/backend/cmux"
-	"github.com/itsmaleen/cmux-companion/bridge/internal/claude"
+	"github.com/itsmaleen/cmux-companion/bridge/internal/transcripts"
 )
 
 // Handle translates one phone command onto herdr's API. Method names and
@@ -493,11 +492,16 @@ func (b *Backend) paneList(params map[string]any) (any, error) {
 
 // --- transcripts ---
 
-// transcript renders the Claude conversation behind a pane. herdr's Claude
-// integration hook reports the session id, which herdr exposes as
-// agent_session; the resolver then finds <id>.jsonl under ~/.claude/projects.
-// Without the integration installed there is no session id, and the resolver
-// falls back to the newest transcript for the pane's cwd.
+// transcript renders the agent conversation behind a pane. herdr's Claude and
+// opencode integration hooks both report their session id as the pane's
+// agent_session, which surfaceRecord turns into a resume_binding the same
+// shape cmux uses: for Claude the resolver finds <id>.jsonl under
+// ~/.claude/projects; for opencode the dispatcher reads the session directly
+// from opencode's database, no title/tty matching needed since herdr already
+// names the exact session. Without an integration installed there is no
+// session id, and Claude's resolver falls back to the newest transcript for
+// the pane's cwd (opencode has no such fallback here: herdr reports no tty for
+// title matching to key off).
 func (b *Backend) transcript(params map[string]any) (json.RawMessage, error) {
 	paneID, _ := params["surface_id"].(string)
 	p, err := b.pane(paneID)
@@ -506,14 +510,16 @@ func (b *Backend) transcript(params map[string]any) (json.RawMessage, error) {
 	}
 	rec := surfaceRecord(p)
 	binding, _ := rec["resume_binding"].(map[string]any)
-	res, err := b.resolver.Render(claude.Request{
+	res, err := b.dispatcher.Render(transcripts.Request{
 		SurfaceID:        paneID,
 		ResumeBinding:    binding,
-		MaxMessages:      cmux.MaxMessages(params),
-		KnownFingerprint: cmux.KnownFingerprint(params),
+		SurfaceTitle:     surfaceTitle(p),
+		Directory:        cwdOf(p),
+		MaxMessages:      transcripts.MaxMessages(params),
+		KnownFingerprint: transcripts.KnownFingerprint(params),
 	})
 	if err != nil {
 		return nil, backend.Errorf("transcript_error", err.Error())
 	}
-	return cmux.TranscriptResult(res), nil
+	return transcripts.Encode(res), nil
 }

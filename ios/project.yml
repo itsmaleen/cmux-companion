@@ -21,18 +21,25 @@ targets:
     info:
       path: cmux/Info.plist
       properties:
-        CFBundleDisplayName: cmux
+        CFBundleDisplayName: merry
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - cmux-bridge
             CFBundleURLName: dev.itsmaleen.cmux-bridge
-        NSCameraUsageDescription: "Used to scan the QR code displayed by cmux-bridge for pairing."
-        NSLocalNetworkUsageDescription: "Used to discover and connect to cmux-bridge running on your Mac over the local network."
+        NSCameraUsageDescription: "Used to scan the pairing QR code shown by the bridge on your Mac."
+        NSLocalNetworkUsageDescription: "Used to discover and connect to the bridge running on your Mac over the local network."
         NSBonjourServices:
           - _cmux-bridge._tcp
-        NSMicrophoneUsageDescription: "Used for voice input to send text to cmux surfaces."
-        NSSpeechRecognitionUsageDescription: "Used to transcribe your voice and send it as text to cmux."
+        NSMicrophoneUsageDescription: "Used for voice input to send text to your terminal sessions."
+        NSSpeechRecognitionUsageDescription: "Used to transcribe your voice and send it as text."
         UILaunchScreen: {}
+        # Portrait is the normal orientation; landscape is only ever reached
+        # via the screenshot fixture's explicit geometry-update request (see
+        # cmuxApp.swift) — declared here so that request isn't refused.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.itsmaleen.cmux

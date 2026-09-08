@@ -151,6 +151,128 @@ reads, and refetches `surface.list` to pick up the title.
 }
 ```
 
+### surface.frame
+
+Sent only to the connection that subscribed (never broadcast) while a
+`surface.frames.subscribe` stream is open. One live terminal repaint. `seq 1`
+of a stream (and of every restart from a resubscribe) is always `full: true`;
+later ones are deltas in the source runtime's own encoding. `bytes` is
+base64, passed through untouched — decode it, apply it to a terminal emulator
+keyed on `encoding`, and render.
+
+```json
+{
+  "type": "surface.frame",
+  "data": {
+    "surface_id": "herdr:w1:p1",
+    "seq": 1,
+    "full": true,
+    "width": 120,
+    "height": 40,
+    "encoding": "ansi",
+    "bytes": "G1sySg=="
+  }
+}
+```
+
+### surface.frames.ended
+
+Sent only to the subscribing connection when a frame stream stops, for any
+reason. `reason` is one of: `closed` (the pane/terminal itself closed),
+`error` (the underlying observer died unexpectedly), `backpressure` (the
+phone fell too far behind — see below), or `unsubscribed` (the phone called
+`surface.frames.unsubscribe`, or the connection is dropping this surface
+because it subscribed to it again). Resubscribing after any of these starts a
+fresh stream with a new full frame.
+
+```json
+{
+  "type": "surface.frames.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "backpressure" }
+}
+```
+
+Backpressure is deliberate: if the phone can't keep up for a couple of
+seconds, the bridge ends the stream outright rather than dropping the one
+delta that didn't fit — a dropped delta would desync the phone's rendered
+grid from the pane's actual contents, silently and permanently. Ending the
+stream and letting the phone resubscribe (getting a fresh full frame) is the
+same "skip ahead, never corrupt" trade mosh makes for a laggy connection.
+
+### surface.screen
+
+Sent only to the connection that subscribed (never broadcast) while a
+`surface.screen.subscribe` stream is open. Unlike `surface.frame`, this is
+rendered on the bridge — a headless terminal emulator applies the runtime's
+raw frames and this push carries the resulting styled text runs for the rows
+that changed, coalesced to a few updates per second, so the phone renders
+without running its own emulator. `full: true` (always the first update of a
+stream, or of any restart from a resubscribe) means `lines` holds every row,
+including empty ones (as a line with no runs); otherwise `lines` holds only
+the rows that changed since the last `surface.screen` update actually **sent**
+on this stream — a tick the bridge skipped while nothing changed, or while
+coalescing several fast frames together, is not a gap to account for.
+
+```json
+{
+  "type": "surface.screen",
+  "data": {
+    "surface_id": "herdr:w1:p1",
+    "seq": 12,
+    "cols": 85,
+    "rows": 40,
+    "full": false,
+    "cursor": { "x": 3, "y": 37, "visible": true },
+    "lines": [
+      {
+        "i": 37,
+        "runs": [
+          { "t": "› ", "fg": "#c0c0c0" },
+          { "t": "hello", "a": 1, "fg": "#ffffff", "bg": "#1e1e1e" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Each line is `{"i": <0-based row>, "runs": [...]}`. A run's `t` is never
+empty — a line's trailing whitespace is trimmed away entirely, so a blank
+line is `{"i": n, "runs": []}`. `fg`/`bg` are `#rrggbb`, omitted when the run
+uses the terminal's default color (indexed/ANSI colors are resolved to RGB
+through the emulator's own palette; truecolor is passed through). `a` is the
+OR of attribute bits, omitted when zero: `1` bold, `2` italic, `4` underline,
+`8` dim, `16` inverse, `32` strikethrough. Adjacent cells sharing a style are
+merged into one run; a wide character counts as one cell of content, its
+padding cell contributing nothing.
+
+### surface.screen.ended
+
+Sent only to the subscribing connection when a screen stream stops, for any
+reason — the same `reason` values and resubscribe semantics as
+`surface.frames.ended` (`closed`, `error`, `backpressure`, `unsubscribed`).
+
+```json
+{
+  "type": "surface.screen.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "closed" }
+}
+```
+
+### surface.fit.ended
+
+Sent only to the connection holding the fit, and only when it ends **on its
+own** — the runtime closed it, or its controlling process died. `reason` is
+`closed` or `error`. Releasing a fit yourself (`surface.fit.release`, or the
+connection closing) never sends this: you already know why.
+
+```json
+{
+  "type": "surface.fit.ended",
+  "data": { "surface_id": "herdr:w1:p1", "reason": "closed" }
+}
+```
+
 ### connected
 
 Sent immediately after WebSocket handshake + auth succeeds.
@@ -167,7 +289,9 @@ Sent immediately after WebSocket handshake + auth succeeds.
     "capabilities": {
       "browser": false,
       "agent_status": true,
-      "notifications": "push"
+      "notifications": "push",
+      "frames": true,
+      "screen": true
     }
   }
 }
@@ -177,7 +301,16 @@ Sent immediately after WebSocket handshake + auth succeeds.
 `capabilities.browser` — the runtime has browser surfaces (`surface.create
 {type:"browser"}`, `browser.url.get`); `agent_status` — surfaces carry a
 runtime-detected `agent_status` and `surface.updated` is pushed;
-`notifications` — `"polled"` (runtime keeps a list) or `"push"` (synthesised).
+`notifications` — `"polled"` (runtime keeps a list) or `"push"` (synthesised);
+`frames` — the runtime can stream a surface's live terminal frames
+(`surface.frames.subscribe`). herdr reports `frames: true`; cmux has no such
+stream and reports `frames: false` — its `surface.frames.subscribe` always
+answers `unsupported`. A composite bridge reports `frames: true` if any
+member has it; the phone should still expect `unsupported` for a surface whose
+own runtime doesn't. `screen` — the runtime can stream a surface as
+bridge-rendered styled rows (`surface.screen.subscribe`) instead of raw
+frames; it is true whenever `frames` is, since the screen stream is built
+generically on top of the frame stream — same `unsupported` rules as `frames`.
 
 ## Client → Server: Commands
 
@@ -204,6 +337,11 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 
 **Surfaces:**
 - `surface.list` — `{"workspace_id":"..."}` (optional, defaults to current)
+  On the cmux backend the bridge adds `resume_binding: {"kind":"opencode",
+  "source":"bridge-tty"}` to a surface cmux reports unbound but whose tty has
+  a real opencode process on it (cmux binds only Claude Code by itself), so
+  the phone treats it as an agent surface; it carries no `checkpoint_id` —
+  `agent.transcript` resolves the session by title + cwd.
 - `surface.focus` — `{"surface_id":"..."}`
 - `surface.create` — `{"type":"terminal"}` (or "browser", creates in focused pane)
 - `surface.split` — `{"direction":"right","surface_id":"..."}` (direction: left/right/up/down)
@@ -223,36 +361,61 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 
 **Agents (bridge-local, not proxied to cmux):**
 - `claude.transcript` — `{"surface_id":"...","max_messages":300,"known_fingerprint":"..."}`
-  → `{"supported":true,"text":"...","session_id":"...","session_missing":false,
-  "fingerprint":"...","unchanged":false,"source":"hook_store_surface"}`.
+  → `{"supported":true,"agent_kind":"claude","text":"...","session_id":"...",
+  "session_title":"","session_missing":false,"fingerprint":"...",
+  "unchanged":false,"source":"hook_store_surface"}`.
 
-  Renders the Claude session behind a surface from Claude Code's own session
-  JSONL, which is the conversation history — claude-code is a full-screen TUI
-  that keeps no terminal scrollback, so `surface.read_text` only ever returns
-  its current screen. The iOS app renders this as the surface's card content,
-  with the live screen appended below it.
+  Renders the conversation behind a surface running Claude Code or opencode —
+  both are full-screen TUIs that keep no terminal scrollback, so
+  `surface.read_text` only ever returns their current screen. The iOS app
+  renders this as the surface's card content, with the live screen appended
+  below it. `agent_kind` says which agent answered (`"claude"` or
+  `"opencode"`, omitted when `supported` is false); `session_title` is the
+  agent's own title for the session, when it has one distinct from
+  `session_id` (opencode; Claude has none).
 
-  The surface → transcript binding comes from cmux's hook session store
-  (`~/.cmuxterm/claude-hook-sessions.json`), where `cmux hooks claude <event>`
-  records the `transcript_path` Claude Code reports for each session along with
-  the surface it runs in. `source` says which strategy resolved the file:
-  `hook_store_surface` (the surface's current session), `hook_store_session`
-  (its `checkpoint_id`'s recorded path), `projects_glob` (derived under
-  `~/.claude/projects`), or `cwd_latest` (last resort, only when no session is
-  named anywhere). A surface bound to a session whose file is gone comes back
-  `session_missing` rather than showing a neighbouring session's conversation.
+  For Claude, the surface → transcript binding comes from cmux's hook session
+  store (`~/.cmuxterm/claude-hook-sessions.json`), where `cmux hooks claude
+  <event>` records the `transcript_path` Claude Code reports for each session
+  along with the surface it runs in. `source` says which strategy resolved the
+  file: `hook_store_surface` (the surface's current session),
+  `hook_store_session` (its `checkpoint_id`'s recorded path), `projects_glob`
+  (derived under `~/.claude/projects`), or `cwd_latest` (last resort, only when
+  no session is named anywhere). A surface bound to a session whose file is
+  gone comes back `session_missing` rather than showing a neighbouring
+  session's conversation.
+
+  For opencode, the conversation lives in `~/.local/share/opencode/opencode.db`
+  (SQLite) rather than per-session files. When the runtime already names the
+  exact session — herdr reports it as the pane's `agent_session`, and a cmux
+  surface can too if `cmux hooks opencode install` is set up — the bridge reads
+  it directly (`source: "resume_binding"`). Otherwise (a plain cmux surface,
+  where the opencode integration is opt-in and usually absent) the bridge
+  identifies the surface as opencode's from its **tty**: cmux's terminal table
+  gives the surface a tty, and a tty with an opencode process on it is running
+  opencode — never inferred from the title, which a shell can be made to say
+  anything with. WHICH conversation then comes from the surface's title
+  (opencode sets it to `"OC | <session title>"`, truncated) matched against
+  sessions in the surface's working directory (`source: "opencode_title_cwd"`).
+  The title is required, not preferred: several opencode surfaces routinely
+  share a directory, so "newest session here" would confidently show a
+  neighbour's conversation. A surface running opencode whose session has no
+  title yet reports `source: "opencode_unidentified"` and renders empty rather
+  than guessing.
 
   `fingerprint` identifies the rendering. Pass it back as `known_fingerprint`
   and an unchanged transcript answers `unchanged: true` with no `text`, which is
   what makes polling this on every refresh cycle cheap.
 
   `agent.transcript` is an accepted alias. Under herdr the binding comes from
-  herdr's own Claude integration (`herdr integration install claude`), which
-  reports the session id herdr exposes as the pane's `agent_session`; the
-  bridge then finds `<id>.jsonl` under `~/.claude/projects` (`source:
-  "projects_glob"`). Without the integration there is no session id and the
-  bridge falls back to the newest transcript for the pane's cwd
-  (`cwd_latest`).
+  herdr's own Claude or opencode integration, which reports the session id
+  herdr exposes as the pane's `agent_session`; for Claude the bridge then finds
+  `<id>.jsonl` under `~/.claude/projects` (`source: "projects_glob"`), for
+  opencode it reads that session id directly from opencode's database
+  (`source: "resume_binding"`). Without the integration there is no session id;
+  Claude falls back to the newest transcript for the pane's cwd (`cwd_latest`),
+  and opencode has no such fallback under herdr (there is no tty to match a
+  title against, unlike cmux).
 
 - `surface.paste_image` — `{"surface_id":"...","image_base64":"...","image_format":"png","text":"what brand is this?","submit":true}`
   → `{"surface_id":"...","path":"/Users/…/pasted-….png","bytes":175,"format":"png"}`.
@@ -303,6 +466,87 @@ Commands use the cmux v2 JSON-RPC envelope. The bridge proxies them to the cmux 
 **Panes:**
 - `pane.list` — `{"workspace_id":"..."}` (optional, defaults to current)
 - `pane.focus` — `{"pane_id":"..."}`
+
+**Frames (live terminal streaming, herdr only — see `capabilities.frames`):**
+- `surface.frames.subscribe` — `{"surface_id":"...","cols":120,"rows":40}`
+  → `{"surface_id":"...","width":120,"height":40}`.
+
+  Starts a live stream of the surface's terminal as `surface.frame` pushes
+  (sent only to this connection, never broadcast — see above), so the phone
+  can render it with a real terminal emulator instead of polling
+  `surface.read_text`. `cols`/`rows` are optional; omitted or `0` means the
+  surface's own native size, which the result reports back. Subscribing again
+  to a surface already subscribed on this connection restarts the stream (a
+  fresh full frame) rather than erroring. Every subscription a connection
+  holds is torn down when the connection closes.
+
+  Errors: `unsupported` (the surface's runtime has no frame stream — always
+  true for cmux), `not_found` (no such surface), `frames_error` (the stream
+  could not be started).
+
+- `surface.frames.unsubscribe` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the stream if one is running; a push
+  (`surface.frames.ended {reason:"unsubscribed"}`) follows. Not an error if
+  nothing was subscribed.
+
+**Screen (bridge-rendered terminal streaming, herdr only — see
+`capabilities.screen`):**
+- `surface.screen.subscribe` — `{"surface_id":"...","cols":85,"rows":40}`
+  → `{"surface_id":"...","cols":85,"rows":40}`.
+
+  Starts a live stream of the surface's terminal rendered on the bridge (a
+  headless VT emulator applies the runtime's frames) as `surface.screen`
+  pushes of styled text runs for the rows that changed — see above — so the
+  phone can render without running its own terminal emulator. `cols`/`rows`
+  are optional; omitted or `0` means the surface's own native size (the same
+  resolution `surface.frames.subscribe` would settle on), which the result
+  reports back. Subscribing again to a surface already subscribed on this
+  connection restarts the stream (a fresh full update) rather than erroring.
+  Every subscription a connection holds is torn down when the connection
+  closes. Independent of any `surface.frames.subscribe` stream on the same
+  surface — a connection may hold both at once.
+
+  Errors: `unsupported` (the surface's runtime has no frame stream — always
+  true for cmux), `not_found` (no such surface), `frames_error` (the
+  underlying stream could not be started).
+
+- `surface.screen.unsubscribe` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the stream if one is running; a push
+  (`surface.screen.ended {reason:"unsubscribed"}`) follows. Not an error if
+  nothing was subscribed.
+
+**Fit to phone (herdr only — resizes the real PTY):**
+- `surface.fit` — `{"surface_id":"...","cols":60,"rows":20}` →
+  `{"surface_id":"...","cols":60,"rows":20}`.
+
+  Temporarily resizes the surface's actual PTY to `cols`x`rows` for as long as
+  this connection holds the fit, so a full-screen TUI (opencode, Claude Code)
+  re-layouts for the phone's screen — e.g. opencode hides its sidebar when
+  narrow. This is a real resize of the terminal the agent runs in, not a
+  cosmetic crop like `surface.frames.subscribe`'s `cols`/`rows`: the Mac's own
+  window/pane layout is untouched, but whatever occupies that pane sees the
+  phone's grid the whole time the fit is held. herdr restores the pane's
+  normal size as soon as the fit is released or the connection drops — there
+  is no "native size" default here, both dimensions are required.
+
+  The first `surface.fit` for a surface on this connection starts holding it;
+  a later `surface.fit` for the **same** surface with different `cols`/`rows`
+  resizes the existing fit in place rather than tearing it down and
+  restarting — cheaper, and the agent inside never sees the PTY close. A
+  connection holds at most one fit per surface. Fits and
+  `surface.frames.subscribe` streams are independent of each other.
+
+  Errors: `unsupported` (the surface's runtime has no fit control — always
+  true for cmux), `invalid_params` (missing or non-positive `cols`/`rows`, or
+  either over 500), `not_found` (no such surface), `fit_error` (herdr ended
+  the control session before the fit was established — the message includes
+  herdr's own reason, e.g. the surface no longer existing under the hood).
+
+- `surface.fit.release` — `{"surface_id":"..."}` → `{"ok":true}`.
+  Ends the fit if one is held, restoring herdr's own layout size for that
+  pane. Not an error if nothing was fit. No `surface.fit.ended` push follows
+  your own release (see above) — every fit a connection holds is also
+  released, silently the same way, when the connection closes.
 
 **Input:**
 - `surface.send_text` — `{"surface_id":"...","text":"ls\n"}`

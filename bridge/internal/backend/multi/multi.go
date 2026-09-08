@@ -57,6 +57,8 @@ func (b *Backend) Info() backend.Info {
 		c := m.Backend.Info().Capabilities
 		caps.Browser = caps.Browser || c.Browser
 		caps.AgentStatus = caps.AgentStatus || c.AgentStatus
+		caps.Frames = caps.Frames || c.Frames
+		caps.Screen = caps.Screen || c.Screen
 		notif[c.Notifications] = true
 	}
 	switch {
@@ -215,6 +217,128 @@ func (b *Backend) Handle(method string, params map[string]any) (json.RawMessage,
 		b.mu.Unlock()
 	}
 	return prefixResult(kind, raw)
+}
+
+// Frames implements backend.FrameSource, routing by the namespaced
+// surfaceID's prefix to the member that owns it and re-namespacing the
+// Frame.SurfaceID of everything that member emits. A member that doesn't
+// itself implement FrameSource (cmux) answers `unsupported`, exactly as a
+// standalone instance of it would.
+func (b *Backend) Frames(ctx context.Context, surfaceID string, cols, rows int) (<-chan backend.FrameEvent, backend.FrameInfo, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.FrameInfo{}, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.FrameInfo{}, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	src, ok := m.Backend.(backend.FrameSource)
+	if !ok {
+		return nil, backend.FrameInfo{}, backend.Errorf("unsupported", kind+" has no frame stream")
+	}
+	events, info, err := src.Frames(ctx, id, cols, rows)
+	if err != nil {
+		return nil, backend.FrameInfo{}, err
+	}
+
+	out := make(chan backend.FrameEvent, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Frame != nil {
+					f := *ev.Frame
+					f.SurfaceID = joinID(kind, f.SurfaceID)
+					ev = backend.FrameEvent{Frame: &f}
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, info, nil
+}
+
+// Screens implements backend.ScreenSource, routing by the namespaced
+// surfaceID's prefix to the member that owns it and re-namespacing the
+// ScreenUpdate.SurfaceID of everything that member emits — the same pattern
+// as Frames. A member that doesn't itself implement ScreenSource answers
+// `unsupported`, exactly as a standalone instance of it would.
+func (b *Backend) Screens(ctx context.Context, surfaceID string, cols, rows int) (<-chan backend.ScreenEvent, backend.FrameInfo, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.FrameInfo{}, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.FrameInfo{}, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	src, ok := m.Backend.(backend.ScreenSource)
+	if !ok {
+		return nil, backend.FrameInfo{}, backend.Errorf("unsupported", kind+" has no screen stream")
+	}
+	events, info, err := src.Screens(ctx, id, cols, rows)
+	if err != nil {
+		return nil, backend.FrameInfo{}, err
+	}
+
+	out := make(chan backend.ScreenEvent, 1)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Update != nil {
+					u := *ev.Update
+					u.SurfaceID = joinID(kind, u.SurfaceID)
+					ev = backend.ScreenEvent{Update: &u}
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, info, nil
+}
+
+// Fit implements backend.Fitter, routing by the namespaced surfaceID's
+// prefix to the member that owns it. Unlike Frames there is nothing in the
+// returned handle to re-namespace — a FitHandle carries no surface id of its
+// own — so the member's handle is simply passed straight through. A member
+// that doesn't itself implement Fitter (cmux) answers `unsupported`, exactly
+// as a standalone instance of it would.
+func (b *Backend) Fit(ctx context.Context, surfaceID string, cols, rows int) (backend.FitHandle, error) {
+	kind, id := splitID(surfaceID)
+	if kind == "" {
+		return nil, backend.Errorf("invalid_params", "surface_id is not namespaced: "+surfaceID)
+	}
+	m := b.member(kind)
+	if m == nil {
+		return nil, backend.Errorf("unknown_backend", "no backend "+kind)
+	}
+	fitter, ok := m.Backend.(backend.Fitter)
+	if !ok {
+		return nil, backend.Errorf("unsupported", kind+" has no fit-to-phone support")
+	}
+	return fitter.Fit(ctx, id, cols, rows)
 }
 
 // fanOut runs a command on every connected member and merges the results;

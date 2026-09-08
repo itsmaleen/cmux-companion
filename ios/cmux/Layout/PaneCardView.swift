@@ -8,6 +8,22 @@ struct PaneCardView: View {
     let transcript: String
     var terminalText: String = ""
     var contentScale: CGFloat = 1.0
+    /// The focused surface's live screen, when the bridge streams one and a
+    /// subscribe has succeeded. Non-nil makes the card render history above
+    /// the bridge-rendered live screen in one text view; nil (no support,
+    /// subscribe still pending, or a non-focused card) renders exactly as
+    /// before.
+    var liveScreen: ScreenModel?
+    /// Reports the live card's content size (the area a fitted pane should
+    /// fill), on first layout and whenever it changes.
+    var onLiveSizeChanged: ((CGSize) -> Void)? = nil
+    /// What a live card shows ABOVE the emulator: the conversation for an
+    /// agent surface, the polled scrollback for a plain shell.
+    var liveHistoryText: String = ""
+    /// True when `liveHistoryText` is a polled screen read (scrollback plus
+    /// the visible screen), so the rows the emulator already shows must be
+    /// trimmed off its end; false for a conversation transcript.
+    var liveHistoryIsPolledScreen: Bool = false
     var isBrowser: Bool = false
     var browserURL: String = ""
     /// When true, scrolling to the top of a focused card opens the conversation
@@ -86,6 +102,8 @@ struct PaneCardView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let liveScreen {
+                        liveContentView(liveScreen)
                     } else if !terminalText.isEmpty {
                         terminalContentView
                     } else {
@@ -130,15 +148,57 @@ struct PaneCardView: View {
         )
     }
 
+    // MARK: - Live terminal content
+
+    /// The live card: the surface's history (conversation or polled
+    /// scrollback) above the bridge-rendered live screen, in the one text view
+    /// every card uses — same scrolling, selection, search and anchoring.
+    private func liveContentView(_ screen: ScreenModel) -> some View {
+        LiveTextCard(screen: screen, onSizeChanged: onLiveSizeChanged) { screen, width in
+            // Fit the screen's columns into the card (minus the text view's
+            // 8pt insets); history keeps the card's normal type size.
+            let liveFont = FrameFit.fontSize(
+                forColumns: screen.cols, viewWidth: max(0, width - 16),
+                advanceOfMAt1pt: LiveCellMetrics.advanceOfMAt1pt
+            )
+            let history = liveHistoryIsPolledScreen
+                ? FrameFit.historyAboveLiveScreen(polledText: liveHistoryText, usedRows: screen.usedRows)
+                : liveHistoryText
+            textContent(text: history, liveScreen: screen.attributed(fontSize: liveFont), liveVersion: screen.version)
+        }
+    }
+
+    private var historyButton: some View {
+        Button {
+            onOpenHistory?()
+        } label: {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .environment(\.colorScheme, .dark)
+                )
+                .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+        }
+        .accessibilityLabel("View conversation history")
+    }
+
     // MARK: - Terminal content
 
     private var terminalContentView: some View {
+        textContent(text: terminalText, liveScreen: nil, liveVersion: 0)
+    }
+
+    private func textContent(text: String, liveScreen: NSAttributedString?, liveVersion: Int) -> some View {
         // UITextView-backed so output is selectable (copy) and URLs are tappable.
         // A claude card's text is its conversation with the live screen below it;
         // pulling past the top opens the same conversation full-screen, which is
         // an easier read than this card's 9pt type.
         TerminalTextView(
-            text: terminalText,
+            text: text,
             fontSize: (isFocused ? 9 : 7) * contentScale,
             textOpacity: isFocused ? 0.85 : 0.5,
             onScrolledToTop: (isFocused && canOpenHistory) ? { onOpenHistory?() } : nil,
@@ -148,7 +208,9 @@ struct PaneCardView: View {
             currentMatchIndex: currentMatchIndex,
             onSearchMatchCount: onSearchMatchCount,
             scrollToBottomRequest: scrollToBottomRequest,
-            onAtBottomChanged: { terminalAtBottom = $0 }
+            onAtBottomChanged: { terminalAtBottom = $0 },
+            liveScreen: liveScreen,
+            liveVersion: liveVersion
         )
         .overlay(alignment: .top) {
             // Only surface the affordance once the user is at the top; a further
@@ -187,6 +249,12 @@ struct PaneCardView: View {
                         .environment(\.colorScheme, .dark)
                 )
                 .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
+                // The visual stays a small 32pt puck (it shouldn't cover more
+                // of the card than it needs to), but the tappable area is
+                // widened to Apple's 44x44 minimum so it's reliably hittable
+                // on a phone where this sits at a card's corner.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Jump to newest output")
     }
@@ -370,7 +438,7 @@ struct TranscriptSheetView: View {
                     Text("This surface's session file is missing")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
-                    Text("cmux binds this surface to session \(appState.claudeTranscriptSession[target.id]?.prefix(8) ?? ""), whose transcript is no longer on disk.")
+                    Text("This surface is bound to session \(appState.claudeTranscriptSession[target.id]?.prefix(8) ?? ""), whose transcript is no longer on disk.")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.25))
                         .multilineTextAlignment(.center)
@@ -385,6 +453,30 @@ struct TranscriptSheetView: View {
         } else {
             TerminalTextView(text: text, fontSize: 12.5, textOpacity: 0.9, trimMarkdownLinks: true)
                 .padding(.horizontal, 4)
+        }
+    }
+}
+
+/// Observes a surface's ScreenModel (its `version`) and re-renders the
+/// card's text content through `content` whenever an update lands, handing it
+/// the card's width so the live screen's columns can be fitted.
+private struct LiveTextCard<Content: View>: View {
+    @ObservedObject var screen: ScreenModel
+    let onSizeChanged: ((CGSize) -> Void)?
+    let content: (ScreenModel, CGFloat) -> Content
+
+    init(screen: ScreenModel, onSizeChanged: ((CGSize) -> Void)?, @ViewBuilder content: @escaping (ScreenModel, CGFloat) -> Content) {
+        self.screen = screen
+        self.onSizeChanged = onSizeChanged
+        self.content = content
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            content(screen, geo.size.width)
+                .onChange(of: geo.size, initial: true) { _, size in
+                    onSizeChanged?(size)
+                }
         }
     }
 }

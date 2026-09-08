@@ -18,7 +18,7 @@ struct PairingView: View {
                     .foregroundStyle(.tint)
 
                 VStack(spacing: 8) {
-                    Text("Pair with cmux")
+                    Text("Pair with your Mac")
                         .font(.title.bold())
                     Text("Scan the QR code shown by\n`cmux-bridge --pair` on your Mac.")
                         .multilineTextAlignment(.center)
@@ -42,7 +42,7 @@ struct PairingView: View {
 
                 Spacer()
             }
-            .navigationTitle("cmux companion")
+            .navigationTitle("merry")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showScanner) {
                 QRScannerView { scannedURL in
