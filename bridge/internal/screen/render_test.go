@@ -12,7 +12,7 @@ import (
 )
 
 // fixtureFrame is one NDJSON line of the phone's screenshot-mode fixtures
-// (ios/cmux/Fixtures/frames-*.ndjson): a single full `terminal.frame` record.
+// (testdata/frames-*.ndjson): a single full `terminal.frame` record.
 type fixtureFrame struct {
 	Type     string `json:"type"`
 	Seq      int    `json:"seq"`
@@ -23,11 +23,11 @@ type fixtureFrame struct {
 	Bytes    string `json:"bytes"`
 }
 
-// loadFixture reads the first NDJSON line of an ios/cmux/Fixtures frame file
+// loadFixture reads the first NDJSON line of a testdata frame recording
 // and returns it as a backend.Frame ready to Feed.
 func loadFixture(t *testing.T, name string) backend.Frame {
 	t.Helper()
-	f, err := os.Open("../../../ios/cmux/Fixtures/" + name)
+	f, err := os.Open("testdata/" + name)
 	if err != nil {
 		t.Fatalf("open fixture %s: %v", name, err)
 	}
