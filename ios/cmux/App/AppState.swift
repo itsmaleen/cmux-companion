@@ -894,6 +894,11 @@ final class AppState: ObservableObject {
                 if response.error?.code == "unsupported" {
                     self.framesUnsupported.insert(surfaceID)
                 }
+                // A transient failure (not_found, a dropped request) on a
+                // restart would otherwise leave a stale ScreenModel frozen on
+                // its last frame. Drop it so the card falls back to polled text
+                // and the next focus or poll can retry.
+                self.screenModels.removeValue(forKey: surfaceID)
                 return
             }
             if self.screenModels[surfaceID] == nil {

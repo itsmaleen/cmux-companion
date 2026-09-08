@@ -365,3 +365,18 @@ func TestStoreIsReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionExists(t *testing.T) {
+	s := newTestStore(t)
+	addSession(t, s, "ses_real01", "/work", "A real session", "", 100)
+
+	if ok, err := s.SessionExists("ses_real01"); err != nil || !ok {
+		t.Fatalf("existing session: ok=%v err=%v, want true/nil", ok, err)
+	}
+	if ok, err := s.SessionExists("ses_gone99"); err != nil || ok {
+		t.Fatalf("absent session: ok=%v err=%v, want false/nil", ok, err)
+	}
+	if _, err := s.SessionExists("not-a-session-id"); err == nil {
+		t.Fatal("malformed id should error, not query")
+	}
+}

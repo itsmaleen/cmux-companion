@@ -191,6 +191,19 @@ func (s *Store) Fingerprint(sessionID string, maxMessages int) (string, error) {
 	return fmt.Sprintf("%d-%d-%d", intField(rows[0], "updated"), intField(rows[0], "parts"), maxMessages), nil
 }
 
+// SessionExists reports whether a session id is present in the database, so a
+// bound-but-deleted session can be told apart from an existing empty one.
+func (s *Store) SessionExists(sessionID string) (bool, error) {
+	if !sessionIDPattern.MatchString(sessionID) {
+		return false, errors.New("invalid session id")
+	}
+	rows, err := s.query("select 1 as present from session where id = " + textLiteral(sessionID) + " limit 1")
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
+}
+
 // Render renders a session's conversation.
 func (s *Store) Render(sessionID string, maxMessages int) (string, error) {
 	if !sessionIDPattern.MatchString(sessionID) {
@@ -240,7 +253,7 @@ func (s *Store) Render(sessionID string, maxMessages int) (string, error) {
 			" json_extract(p.data,'$.type') as type," +
 			" substr(coalesce(json_extract(p.data,'$.text'),''),1," + fmt.Sprint(maxPartTextBytes) + ") as text," +
 			" json_extract(p.data,'$.tool') as tool," +
-			" json_extract(p.data,'$.state.input') as input" +
+			" substr(coalesce(json_extract(p.data,'$.state.input'),''),1," + fmt.Sprint(maxToolInputBytes) + ") as input" +
 			" from part p" +
 			" where p.message_id in (" + strings.Join(ids, ",") + ")" +
 			" and json_extract(p.data,'$.type') in ('text','tool')" +
@@ -276,6 +289,14 @@ func (s *Store) Render(sessionID string, maxMessages int) (string, error) {
 // again by the renderer; this only stops a single pathological part from
 // crossing the process boundary in full.
 const maxPartTextBytes = 20000
+
+// maxToolInputBytes bounds the tool-call input JSON pulled per part. A tool
+// part embeds its whole input (a file write's entire content, say), so an
+// unbounded column drags megabytes per message across the sqlite3 process
+// boundary on every poll. Only a few short keys (command, path, pattern) are
+// ever summarised, so 64 KiB is far more than any real summary needs; a
+// truncated JSON simply fails to parse and the tool line renders without args.
+const maxToolInputBytes = 65536
 
 // renderPart turns one extracted part row into a line of transcript.
 //

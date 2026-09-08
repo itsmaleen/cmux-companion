@@ -40,8 +40,19 @@ final class ScreenModel: ObservableObject {
     }
 
     func apply(_ update: ScreenUpdate) {
-        if !update.full && update.seq != lastSeq + 1 && lastSeq != 0 {
-            onResyncNeeded?()
+        if !update.full && lastSeq != 0 {
+            if update.seq <= lastSeq {
+                // A stale or duplicate delta — e.g. an update left in flight by
+                // a resubscribe arriving after the new stream's full. It rebuilds
+                // nothing correctly and must not trigger a resync (that would
+                // spuriously restart the healthy new stream). Drop it.
+                return
+            }
+            if update.seq > lastSeq + 1 {
+                // A forward gap: a delta whose predecessor never arrived. The
+                // screen can no longer be trusted; ask for a fresh full update.
+                onResyncNeeded?()
+            }
         }
         lastSeq = update.seq
         // The bridge caps these, but never trust a number that sizes an

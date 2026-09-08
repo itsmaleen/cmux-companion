@@ -111,6 +111,12 @@ func (d *Dispatcher) Render(req Request) (Result, error) {
 
 	case "opencode":
 		if checkpointID, _ := req.ResumeBinding["checkpoint_id"].(string); checkpointID != "" {
+			// The runtime bound this surface to a specific session. If that
+			// session is not in the database it was deleted — report it
+			// missing rather than rendering it as an empty existing session.
+			if exists, err := d.opencode.SessionExists(checkpointID); err == nil && !exists {
+				return Result{Supported: true, AgentKind: "opencode", SessionID: checkpointID, SessionMissing: true, Source: "resume_binding"}, nil
+			}
 			return d.renderOpencodeSession(checkpointID, req.MaxMessages, req.KnownFingerprint, "resume_binding")
 		}
 		// The runtime knows this is opencode but not which session — fall
