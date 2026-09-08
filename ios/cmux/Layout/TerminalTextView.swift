@@ -412,6 +412,7 @@ struct TerminalTextSnapshot: Equatable {
             && a.trimMarkdownLinks == b.trimMarkdownLinks && a.searchQuery == b.searchQuery
             && a.currentMatchIndex == b.currentMatchIndex
             && (a.liveScreen == nil) == (b.liveScreen == nil) && a.liveVersion == b.liveVersion
+            && a.liveScreen?.length == b.liveScreen?.length
     }
 }
 

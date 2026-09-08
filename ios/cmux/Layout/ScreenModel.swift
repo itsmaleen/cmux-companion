@@ -23,6 +23,8 @@ final class ScreenModel: ObservableObject {
     /// resubscribe yields a fresh full update.
     var onResyncNeeded: (() -> Void)?
 
+    private static let maxDimension = 1000
+
     private var cachedVersion = -1
     private var cachedFontSize: CGFloat = 0
     private var cachedAttributed: NSAttributedString?
@@ -42,10 +44,15 @@ final class ScreenModel: ObservableObject {
             onResyncNeeded?()
         }
         lastSeq = update.seq
-        if update.full || update.cols != cols || update.rows != rows {
-            cols = update.cols
-            rows = update.rows
-            lines = Array(repeating: [], count: max(0, rows))
+        // The bridge caps these, but never trust a number that sizes an
+        // allocation: a bad cols/rows would otherwise allocate an enormous
+        // line array. Clamp to a grid far past any real pane.
+        let newCols = min(max(0, update.cols), Self.maxDimension)
+        let newRows = min(max(0, update.rows), Self.maxDimension)
+        if update.full || newCols != cols || newRows != rows {
+            cols = newCols
+            rows = newRows
+            lines = Array(repeating: [], count: rows)
         }
         for line in update.lines where line.i >= 0 && line.i < rows {
             lines[line.i] = line.runs
@@ -101,7 +108,7 @@ enum ScreenRenderer {
                 line.append(NSAttributedString(string: run.t, attributes: attrs))
             }
             if let cursor, cursor.visible, cursor.y == row {
-                drawCursor(on: line, at: cursor.x, font: regular, paragraph: paragraph)
+                drawCursor(on: line, atColumn: cursor.x, runs: runs, font: regular, paragraph: paragraph)
             }
             out.append(line)
             if row < lines.count - 1 {
@@ -113,19 +120,38 @@ enum ScreenRenderer {
 
     /// A block cursor: inverts the cell under it, padding the row with spaces
     /// when the cursor sits past the end of its content.
-    private static func drawCursor(on line: NSMutableAttributedString, at x: Int, font: UIFont, paragraph: NSParagraphStyle) {
-        let length = line.length
-        if x >= length {
+    private static func drawCursor(on line: NSMutableAttributedString, atColumn column: Int, runs: [ScreenRun], font: UIFont, paragraph: NSParagraphStyle) {
+        // `column` counts terminal cells; the attributed string is indexed in
+        // UTF-16 units. A wide or multi-unit glyph makes those diverge, so walk
+        // the runs counting one cell per Character until the column is reached.
+        var cells = 0
+        var utf16 = 0
+        for run in runs {
+            for ch in run.t {
+                if cells == column { break }
+                cells += 1
+                utf16 += String(ch).utf16.count
+            }
+            if cells == column { break }
+        }
+        if cells < column {
+            // Cursor past the row's content: pad with spaces to reach it.
+            let pad = column - cells
             line.append(NSAttributedString(
-                string: String(repeating: " ", count: x - length + 1),
+                string: String(repeating: " ", count: pad + 1),
+                attributes: [.font: font, .paragraphStyle: paragraph, .foregroundColor: defaultForeground]
+            ))
+            utf16 = line.length - 1
+        } else if utf16 >= line.length {
+            line.append(NSAttributedString(
+                string: " ",
                 attributes: [.font: font, .paragraphStyle: paragraph, .foregroundColor: defaultForeground]
             ))
         }
-        let range = NSRange(location: x, length: 1)
         line.addAttributes([
             .backgroundColor: UIColor.white.withAlphaComponent(0.75),
             .foregroundColor: UIColor.black,
-        ], range: range)
+        ], range: NSRange(location: utf16, length: 1))
     }
 
     static func color(hex: String) -> UIColor? {

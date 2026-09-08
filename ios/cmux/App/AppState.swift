@@ -969,6 +969,16 @@ final class AppState: ObservableObject {
                 }
                 return
             }
+            // Focus may have moved while the fit was in flight. A fit resizes
+            // the real pane on the Mac, so it is only ever held for the surface
+            // on screen — record it and restart the stream only if this is
+            // still the focused surface; otherwise release it right back, or
+            // the Mac pane stays resized with nothing tracking it (releaseFit
+            // during the focus switch found nothing to release yet).
+            guard surfaceID == self.frameFocusedSurfaceID else {
+                self.sendRaw(method: "surface.fit.release", params: ["surface_id": surfaceID]) { _ in }
+                return
+            }
             self.fittedSurfaces[surfaceID] = grid
             self.restartFrames(surfaceID)
         }
