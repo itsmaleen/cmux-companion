@@ -153,14 +153,20 @@ func (b *Backend) Fit(ctx context.Context, surfaceID string, cols, rows int) (ba
 
 	// An idle pane emits no frame, so waiting for one would cost the whole
 	// timeout on every fit. The resize itself is observable right away:
-	// poll the pane's viewport until it reports the requested rows.
+	// poll the pane's viewport until it reports the requested rows. stopPoll
+	// is closed once establishment resolves so this goroutine doesn't keep
+	// querying herdr every 100ms for the whole life of the fit.
 	confirmed := make(chan struct{}, 1)
+	stopPoll := make(chan struct{})
+	defer close(stopPoll)
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-cctx.Done():
+				return
+			case <-stopPoll:
 				return
 			case <-ticker.C:
 				if got, err := b.liveViewportRows(surfaceID); err == nil && got == rows {

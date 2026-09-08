@@ -120,20 +120,29 @@ func (s *Store) ResolveSession(surfaceTitle, directory string) (Session, bool) {
 		return Session{}, false
 	}
 
+	// The surface title is truncated, so it is a PREFIX of the session title,
+	// never the whole of it. If more than one session in this directory shares
+	// that prefix the surface is genuinely ambiguous — refuse to guess (report
+	// unidentified) rather than silently show a neighbour's conversation.
+	var match Session
+	found := 0
 	for _, row := range rows {
-		title := stringField(row, "title")
-		// The surface title is truncated, so it is a PREFIX of the session
-		// title, never the whole of it.
-		if strings.HasPrefix(title, stem) {
-			return Session{
-				ID:        stringField(row, "id"),
-				Title:     title,
-				Directory: stringField(row, "directory"),
-				UpdatedAt: intField(row, "time_updated"),
-			}, true
+		if strings.HasPrefix(stringField(row, "title"), stem) {
+			found++
+			if found == 1 {
+				match = Session{
+					ID:        stringField(row, "id"),
+					Title:     stringField(row, "title"),
+					Directory: stringField(row, "directory"),
+					UpdatedAt: intField(row, "time_updated"),
+				}
+			}
 		}
 	}
-	return Session{}, false
+	if found != 1 {
+		return Session{}, false
+	}
+	return match, true
 }
 
 // surfaceTitlePrefix is what opencode puts before the session title in the

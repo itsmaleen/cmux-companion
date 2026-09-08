@@ -28,6 +28,12 @@ const framePushBuffer = 16
 // bridge spawn a PTY thousands of cells wide.
 const maxFitDimension = 500
 
+// maxScreenDimension bounds cols/rows a `surface.screen.subscribe` may request.
+// The renderer allocates a cell grid eagerly (~230 bytes/cell), so an
+// unbounded value is a memory-exhaustion lever; 1000x1000 is far past any real
+// phone yet only ~230 MiB worst case. 0 still means "native size".
+const maxScreenDimension = 1000
+
 // maxIncomingMessageBytes bounds one client message. Sized from the largest
 // image a paste may carry: base64 inflates by 4/3, plus room for the JSON
 // envelope around it.
@@ -466,6 +472,10 @@ func handleScreenSubscribe(cmd commandRequest, be backend.Backend, connCtx conte
 	if !ok {
 		return errorResponse(cmd.ID, "unsupported", "this backend has no screen stream")
 	}
+	cols, rows := intParam(cmd.Params, "cols"), intParam(cmd.Params, "rows")
+	if cols > maxScreenDimension || rows > maxScreenDimension {
+		return errorResponse(cmd.ID, "invalid_params", fmt.Sprintf("cols and rows must be at most %d", maxScreenDimension))
+	}
 
 	if cancel, exists := subs[surfaceID]; exists {
 		cancel()
@@ -473,7 +483,7 @@ func handleScreenSubscribe(cmd commandRequest, be backend.Backend, connCtx conte
 	}
 
 	subCtx, cancel := context.WithCancel(connCtx)
-	events, info, err := src.Screens(subCtx, surfaceID, intParam(cmd.Params, "cols"), intParam(cmd.Params, "rows"))
+	events, info, err := src.Screens(subCtx, surfaceID, cols, rows)
 	if err != nil {
 		cancel()
 		return errorFor(cmd.ID, err)
@@ -570,10 +580,18 @@ func handleFit(cmd commandRequest, be backend.Backend, connCtx context.Context, 
 	}
 
 	if h, exists := fits[surfaceID]; exists {
-		if err := h.Resize(cols, rows); err != nil {
-			return errorResponse(cmd.ID, "fit_error", err.Error())
+		// A handle whose Done has fired ended on its own (herdr closed the
+		// controller); its stdin is closed, so Resize would fail. Drop it and
+		// establish a fresh fit below rather than resize a dead controller.
+		select {
+		case <-h.Done():
+			delete(fits, surfaceID)
+		default:
+			if err := h.Resize(cols, rows); err != nil {
+				return errorResponse(cmd.ID, "fit_error", err.Error())
+			}
+			return fitResult(cmd.ID, surfaceID, cols, rows)
 		}
-		return fitResult(cmd.ID, surfaceID, cols, rows)
 	}
 
 	fitter, ok := be.(backend.Fitter)

@@ -123,10 +123,13 @@ func runStream(ctx context.Context, frames <-chan backend.FrameEvent, cols, rows
 			}
 			if ev.Frame != nil {
 				if err := r.Feed(*ev.Frame); err != nil {
-					// A malformed delta shouldn't kill the whole stream; skip
-					// it and keep going from whatever state the emulator is
-					// in — the next good frame repaints over it.
-					continue
+					// A delta is incremental: skipping it desyncs the emulator
+					// from the pane for every later render, with no full repaint
+					// to recover until a resubscribe. End the stream instead so
+					// the phone resubscribes and gets a fresh full update —
+					// the same "skip ahead, never corrupt" trade frames make.
+					sendScreenEvent(context.Background(), out, backend.ScreenEvent{Ended: "error"}, screenFinalEventTimeout)
+					return
 				}
 				dirty = true
 				if !sentFirst {
